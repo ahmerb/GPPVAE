@@ -50,6 +50,7 @@ class Conv2dCellUp(nn.Module):
 
 
 class FaceVAE(nn.Module):
+    # nf: in and out channels per conv2d layer (except first conv layer is 'colors' in channels and 'nf' out channels)
     def __init__(
         self, img_size=128, nf=32, zdim=256, steps=5, colors=3, act="elu", vy=1e-3
     ):
@@ -123,3 +124,7 @@ class FaceVAE(nn.Module):
         )
         elbo = nll + kld
         return elbo, mse, nll, kld
+
+if __name__ == "__main__":
+    net = FaceVAE()
+    print(net)
