@@ -32,7 +32,7 @@ parser.add_option(
     help="dataset path",
 )
 parser.add_option(
-    "--outdir", dest="outdir", type=str, default="./../out/vae", help="output dir"
+    "--outdir", dest="outdir", type=str, default="./out/vae", help="output dir"
 )
 parser.add_option("--seed", dest="seed", type=int, default=0, help="seed")
 parser.add_option(

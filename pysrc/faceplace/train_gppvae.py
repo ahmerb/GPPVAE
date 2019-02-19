@@ -30,11 +30,11 @@ parser.add_option(
     "--data",
     dest="data",
     type=str,
-    default="./../data/faceplace/data_faces.h5",
+    default="./data/faceplace/data_faces.h5",
     help="dataset path",
 )
 parser.add_option(
-    "--outdir", dest="outdir", type=str, default="./../out/gppvae", help="output dir"
+    "--outdir", dest="outdir", type=str, default="./out/gppvae", help="output dir"
 )
 parser.add_option("--vae_cfg", dest="vae_cfg", type=str, default=None)
 parser.add_option("--vae_weights", dest="vae_weights", type=str, default=None)
