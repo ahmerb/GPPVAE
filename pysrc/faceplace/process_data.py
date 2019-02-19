@@ -15,7 +15,8 @@ data_dir = sys.argv[1]
 def main():
 
     # 1. download and unzip data
-    download_data(data_dir)
+    download_data()
+    unzip_data()
 
     # 2. load data
     RV = import_data()
@@ -30,6 +31,12 @@ def main():
         fout.create_dataset(key, data=RV[key])
     fout.close()
 
+def download_data():
+    download("http://wiki.cnbc.cmu.edu/images/asian.zip", dest=data_dir)
+    download("http://wiki.cnbc.cmu.edu/images/africanamerican.zip", dest=data_dir)
+    download("http://wiki.cnbc.cmu.edu/images/caucasian.zip", dest=data_dir)
+    download("http://wiki.cnbc.cmu.edu/images/hispanic.zip", dest=data_dir)
+    download("http://wiki.cnbc.cmu.edu/images/multiracial.zip", dest=data_dir)
 
 def unzip_data():
 
