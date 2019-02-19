@@ -28,7 +28,7 @@ parser.add_option(
     "--data",
     dest="data",
     type=str,
-    default="./../data/faceplace/data_faces.h5",
+    default="./data/data_faces.h5",
     help="dataset path",
 )
 parser.add_option(
