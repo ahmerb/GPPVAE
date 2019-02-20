@@ -30,7 +30,7 @@ parser.add_option(
     "--data",
     dest="data",
     type=str,
-    default="./data/faceplace/data_faces.h5",
+    default="./data/data_faces.h5",
     help="dataset path",
 )
 parser.add_option(
@@ -69,11 +69,11 @@ opt_dict = vars(opt)
 
 
 if opt.vae_cfg is None:
-    opt.vae_cfg = "./../out/vae/vae.cfg.p"
+    opt.vae_cfg = "./out/vae/vae.cfg.p"
 vae_cfg = pickle.load(open(opt.vae_cfg, "rb"))
 
 if opt.vae_weights is None:
-    opt.vae_weights = "./../out/vae/weights/weights.00000.pt"
+    opt.vae_weights = "./out/vae/weights/weights.00000.pt"
 
 if not os.path.exists(opt.outdir):
     os.makedirs(opt.outdir)
@@ -158,8 +158,8 @@ def main():
         Z = Zm + Eps * Zs
 
         # 3. evaluation step (not needed for training)
-        Vt = vm(Dt, Wt).detach()
-        Vv = vm(Dv, Wv).detach()
+        Vt = vm(Dt, Wt).detach() # Dt is training obj vectors, Wt is training view vectors. Vt is V in K=V*V^t+alpha*I (eqn 20 in paper), i.e. low rank aproximation for kernel
+        Vv = vm(Dv, Wv).detach() # Dv is valid obj vectors, Wv is valid view vectors.
         rv_eval, imgs, covs = eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv)
 
         # 4. compute first-order Taylor expansion coefficient

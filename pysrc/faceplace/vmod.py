@@ -13,6 +13,22 @@ def normalize_rows(x):
 
 
 class Vmodel(nn.Module):
+    # P number of unique objects, denoted x, M dims. 
+    # Q number of unique   views, denoted w, R dims.
+    # N                  samples, denoted y, K dims.
+    # N   latent representations, denoted z, L dims.
+    #
+    # A latent z_n of object p_n in view q_n is generated
+    #  from obj feature vector x_{p_n} and view feature vector w_{q_n}.
+    #
+    # Called with: (in gppvae after setting up the VAE)
+    # P = sp.unique(obj["train"]).shape[0]
+    # Q = sp.unique(view["train"]).shape[0]
+    # vm = Vmodel(P, Q, opt.xdim, Q).cuda() # xdim is rank of object linear covariance
+    # gp = GP(n_rand_effs=1).to(device)
+    # gp_params = nn.ParameterList()
+    # gp_params.extend(vm.parameters())
+    # gp_params.extend(gp.parameters())
     def __init__(self, P, Q, p, q):
         super(Vmodel, self).__init__()
         self.x0 = nn.Parameter(torch.randn(P, p))
