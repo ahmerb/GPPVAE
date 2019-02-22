@@ -146,7 +146,7 @@ if __name__ == "__main__":
         Zg = sp.dot(G, sp.randn(G.shape[1], L))
         Zn = sp.randn(N, L)
 
-        # generate variance exapleind
+        # generate variance explained
         vg = sp.linspace(0.8, 0, L)
 
         # rescale and sum
