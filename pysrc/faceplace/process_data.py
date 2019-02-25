@@ -9,7 +9,9 @@ from scipy.misc import imresize
 import os
 import h5py
 
-# where have been downloaded
+# parse download directory
+if len(sys.argv) < 2:
+    print("must specify data download directory, e.g. `python process_data.py data`")
 data_dir = sys.argv[1]
 
 def main():
@@ -32,11 +34,17 @@ def main():
     fout.close()
 
 def download_data():
+    print("downloading 1...")
     download("http://wiki.cnbc.cmu.edu/images/asian.zip", dest=data_dir)
+    print("downloading 2...")
     download("http://wiki.cnbc.cmu.edu/images/africanamerican.zip", dest=data_dir)
+    print("downloading 3...")
     download("http://wiki.cnbc.cmu.edu/images/caucasian.zip", dest=data_dir)
+    print("downloading 4...")
     download("http://wiki.cnbc.cmu.edu/images/hispanic.zip", dest=data_dir)
+    print("downloading 5...")
     download("http://wiki.cnbc.cmu.edu/images/multiracial.zip", dest=data_dir)
+    print("...done")
 
 def unzip_data():
 

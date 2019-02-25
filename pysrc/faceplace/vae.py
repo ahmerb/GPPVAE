@@ -59,9 +59,9 @@ class FaceVAE(nn.Module):
 
         # store useful stuff
         self.red_img_size = img_size // (2 ** steps)
-        self.nf = nf
+        self.nf = nf # number of filters per conv layer
         self.size_flat = self.red_img_size ** 2 * nf
-        self.K = img_size ** 2 * colors
+        self.K = img_size ** 2 * colors # number of pixels in image?
         ks = 3
 
         # define variance

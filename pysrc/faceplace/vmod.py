@@ -31,8 +31,8 @@ class Vmodel(nn.Module):
     # gp_params.extend(gp.parameters())
     def __init__(self, P, Q, p, q):
         super(Vmodel, self).__init__()
-        self.x0 = nn.Parameter(torch.randn(P, p))
-        self.v0 = nn.Parameter(torch.randn(Q, q))
+        self.x0 = nn.Parameter(torch.randn(P, p)) # trainable parameter
+        self.v0 = nn.Parameter(torch.randn(Q, q)) # trainable parameter
         self._init_params()
 
     def x(self):
@@ -41,6 +41,8 @@ class Vmodel(nn.Module):
     def v(self):
         return normalize_rows(self.v0)
 
+    # d is object vector
+    # w is   view vector
     def forward(self, d, w):
         # embed
         X = F.embedding(d, self.x())
@@ -63,17 +65,21 @@ if __name__ == "__main__":
     p = 2
     q = 2
 
-    pdb.set_trace()
+    #pdb.set_trace()
 
-    vm = Vmodel(P, Q, p, q).cuda()
+    vm = Vmodel(P, Q, p, q)#.cuda()
 
     # _d and _w
     _d = sp.kron(sp.arange(P), sp.ones(2))
     _w = sp.kron(sp.ones(2), sp.arange(Q))
 
     # d and w
-    d = Variable(torch.Tensor(_d).long(), requires_grad=False).cuda()
-    w = Variable(torch.Tensor(_w).long(), requires_grad=False).cuda()
+    d = Variable(torch.Tensor(_d).long(), requires_grad=False)#.cuda()
+    w = Variable(torch.Tensor(_w).long(), requires_grad=False)#.cuda()
 
+    print(d.size())
+    print(w.size())
     V = vm(d, w)
-    pdb.set_trace()
+    print(V.size())
+
+    #pdb.set_trace()

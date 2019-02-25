@@ -49,6 +49,8 @@ def download(url, dest=None):
         dest = os.getcwd()
 
     filepath = os.path.join(dest, _filename(url))
+    print(url)
+    print(filepath)
     urlretrieve(url, filepath)
 
 

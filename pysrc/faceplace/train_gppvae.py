@@ -120,21 +120,21 @@ def main():
     val_queue = DataLoader(val_data, batch_size=opt.bs, shuffle=False)
 
     # longint view and object repr
-    Dt = Variable(obj["train"][:, 0].long(), requires_grad=False).cuda()
-    Wt = Variable(view["train"][:, 0].long(), requires_grad=False).cuda()
-    Dv = Variable(obj["val"][:, 0].long(), requires_grad=False).cuda()
-    Wv = Variable(view["val"][:, 0].long(), requires_grad=False).cuda()
+    Dt = Variable(obj["train"][:, 0].long(), requires_grad=False)#.cuda()
+    Wt = Variable(view["train"][:, 0].long(), requires_grad=False)#.cuda()
+    Dv = Variable(obj["val"][:, 0].long(), requires_grad=False)#.cuda()
+    Wv = Variable(view["val"][:, 0].long(), requires_grad=False)#.cuda()
 
     # define VAE and optimizer
     vae = FaceVAE(**vae_cfg).to(device)
-    RV = torch.load(opt.vae_weights)
+    RV = torch.load(opt.vae_weights, map_location='cpu')
     vae.load_state_dict(RV)
     vae.to(device)
 
     # define gp
-    P = sp.unique(obj["train"]).shape[0]
-    Q = sp.unique(view["train"]).shape[0]
-    vm = Vmodel(P, Q, opt.xdim, Q).cuda()
+    P = sp.unique(obj["train"]).shape[0] # number unique obj's
+    Q = sp.unique(view["train"]).shape[0] # number unique views
+    vm = Vmodel(P, Q, opt.xdim, Q)#.cuda() # low-rank approx (sparse psuedo-input gp)
     gp = GP(n_rand_effs=1).to(device)
     gp_params = nn.ParameterList()
     gp_params.extend(vm.parameters())
@@ -151,22 +151,27 @@ def main():
     for epoch in range(opt.epochs):
 
         # 1. encode Y in mini-batches
-        Zm, Zs = encode_Y(vae, train_queue)
+        Zm, Zs = encode_Y(vae, train_queue) # gets encodings (distrib params q(z|y=y)) for entire dataset
 
         # 2. sample Z
-        Eps = Variable(torch.randn(*Zs.shape), requires_grad=False).cuda()
+        # sample a z for each encoding (zm,zs) above
+        Eps = Variable(torch.randn(*Zs.shape), requires_grad=False)#.cuda()
         Z = Zm + Eps * Zs
 
         # 3. evaluation step (not needed for training)
+        # run Vmodel on object and view training feature vectors (think this is entire training data?) to give us low-rank approx V for kernel K
         Vt = vm(Dt, Wt).detach() # Dt is training obj vectors, Wt is training view vectors. Vt is V in K=V*V^t+alpha*I (eqn 20 in paper), i.e. low rank aproximation for kernel
+
         Vv = vm(Dv, Wv).detach() # Dv is valid obj vectors, Wv is valid view vectors.
         rv_eval, imgs, covs = eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv)
 
         # 4. compute first-order Taylor expansion coefficient
+        # evaluate a, B, c across all samples (which we used for Vt)?
         Zb, Vbs, vbs, gp_nll = gp.taylor_coeff(Z, [Vt])
         rv_eval["gp_nll"] = float(gp_nll.data.mean().cpu()) / vae.K
 
         # 5. accumulate gradients over mini-batches and update params
+        # use taylor series approx for the gp loss
         rv_back = backprop_and_update(
             vae,
             gp,
@@ -202,18 +207,21 @@ def main():
 
 
 def encode_Y(vae, train_queue):
+    # finds encoding of every single datapoint
+    # does forward encoding passes in minibatches
 
     vae.eval()
 
     with torch.no_grad():
 
         n = train_queue.dataset.Y.shape[0]
-        Zm = Variable(torch.zeros(n, vae_cfg["zdim"]), requires_grad=False).cuda()
-        Zs = Variable(torch.zeros(n, vae_cfg["zdim"]), requires_grad=False).cuda()
+        Zm = Variable(torch.zeros(n, vae_cfg["zdim"]), requires_grad=False)#.cuda()
+        Zs = Variable(torch.zeros(n, vae_cfg["zdim"]), requires_grad=False)#.cuda()
 
         for batch_i, data in enumerate(train_queue):
-            y = data[0].cuda()
-            idxs = data[-1].cuda()
+            # data = [ imgs, objs, views, indices of corresponding data ]
+            y = data[0]#.cuda()
+            idxs = data[-1]#.cuda()
             zm, zs = vae.encode(y)
             Zm[idxs], Zs[idxs] = zm.detach(), zs.detach()
 
@@ -235,11 +243,11 @@ def eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv):
         U, UBi, _ = gp.U_UBi_Shb([Vt], vs)
         Kiz = gp.solve(Zm, U, UBi, vs)
         Zo = vs[0] * Vv.mm(Vt.transpose(0, 1).mm(Kiz))
-        mse_out = Variable(torch.zeros(Vv.shape[0], 1), requires_grad=False).cuda()
-        mse_val = Variable(torch.zeros(Vv.shape[0], 1), requires_grad=False).cuda()
+        mse_out = Variable(torch.zeros(Vv.shape[0], 1), requires_grad=False)#.cuda()
+        mse_val = Variable(torch.zeros(Vv.shape[0], 1), requires_grad=False)#.cuda()
         for batch_i, data in enumerate(val_queue):
-            idxs = data[-1].cuda()
-            Yv = data[0].cuda()
+            idxs = data[-1]#.cuda()
+            Yv = data[0]#.cuda()
             Zv = vae.encode(Yv)[0].detach()
             Yr = vae.decode(Zv)
             Yo = vae.decode(Zo[idxs])
@@ -272,10 +280,12 @@ def backprop_and_update(
     vae.train()
     gp.train()
     vm.train()
+
+    # for each minibatch
     for batch_i, data in enumerate(train_queue):
 
-        # subset data
-        y = data[0].cuda()
+        # subset data (data[-1] gives indices of datapoints in this minibatch)
+        y = data[0]#.cuda()
         eps = Eps[data[-1]]
         _d = Dt[data[-1]]
         _w = Wt[data[-1]]
@@ -283,16 +293,19 @@ def backprop_and_update(
         _Vbs = [Vbs[0][data[-1]]]
 
         # forward vae
+        # computes reconstruction loss (distance between true image and output of decoder)
         zm, zs = vae.encode(y)
         z = zm + zs * eps
         yr = vae.decode(z)
         recon_term, mse = vae.nll(y, yr)
 
         # forward gp
+        # use approx V and compute Taylor expansion to find approx for gp_nll
         _Vs = [vm(_d, _w)]
         gp_nll_fo = gp.taylor_expansion(z, _Vs, _Zb, _Vbs, vbs) / vae.K
 
         # penalization
+        # compute the regularization term
         pen_term = -0.5 * zs.sum(1)[:, None] / vae.K
 
         # loss and backward
