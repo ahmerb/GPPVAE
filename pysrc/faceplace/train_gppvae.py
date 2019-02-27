@@ -116,25 +116,33 @@ def main():
     img, obj, view = read_face_data(opt.data)  # image, object, and view
     train_data = FaceDataset(img["train"], obj["train"], view["train"])
     val_data = FaceDataset(img["val"], obj["val"], view["val"])
+
+    # iterating over a queue gives data minibatches that look like:
+    # data = [ imgs, objs, views, indices of corresponding data ]
     train_queue = DataLoader(train_data, batch_size=opt.bs, shuffle=True)
     val_queue = DataLoader(val_data, batch_size=opt.bs, shuffle=False)
 
     # longint view and object repr
+    # Dt (Dv) is a 1d arr, each element being an id of the person in the corresponding img
+    # Wt (Wv) is a 1d arr, each element being a number 0 to 8 representing rotation angle? (i think)
+    # so, these tensors just hold id's, not the object and feature vectors themselves (which are unobserved) (i think)
     Dt = Variable(obj["train"][:, 0].long(), requires_grad=False)#.cuda()
     Wt = Variable(view["train"][:, 0].long(), requires_grad=False)#.cuda()
     Dv = Variable(obj["val"][:, 0].long(), requires_grad=False)#.cuda()
     Wv = Variable(view["val"][:, 0].long(), requires_grad=False)#.cuda()
+    # print("Dv.size = ", Dv.size()); print(Dv); return
+    # print("Wv.size = ", Wv.size()); print(Wv); return
 
     # define VAE and optimizer
     vae = FaceVAE(**vae_cfg).to(device)
-    RV = torch.load(opt.vae_weights, map_location='cpu')
+    RV = torch.load(opt.vae_weights, map_location='cpu') # remove map_location when using gpu
     vae.load_state_dict(RV)
     vae.to(device)
 
     # define gp
     P = sp.unique(obj["train"]).shape[0] # number unique obj's
     Q = sp.unique(view["train"]).shape[0] # number unique views
-    vm = Vmodel(P, Q, opt.xdim, Q)#.cuda() # low-rank approx (sparse psuedo-input gp)
+    vm = Vmodel(P, Q, opt.xdim, Q)#.cuda() # low-rank approx
     gp = GP(n_rand_effs=1).to(device)
     gp_params = nn.ParameterList()
     gp_params.extend(vm.parameters())
@@ -159,10 +167,10 @@ def main():
         Z = Zm + Eps * Zs
 
         # 3. evaluation step (not needed for training)
-        # run Vmodel on object and view training feature vectors (think this is entire training data?) to give us low-rank approx V for kernel K
-        Vt = vm(Dt, Wt).detach() # Dt is training obj vectors, Wt is training view vectors. Vt is V in K=V*V^t+alpha*I (eqn 20 in paper), i.e. low rank aproximation for kernel
+        # run Vmodel on object and view training ids (entire training data?) to give us low-rank approx V for kernel K
+        Vt = vm(Dt, Wt).detach() # Dt is training obj ids, Wt is training view ids. Vt is V in K=V*V^t+alpha*I (eqn 20 in paper), i.e. low rank aproximation for kernel
 
-        Vv = vm(Dv, Wv).detach() # Dv is valid obj vectors, Wv is valid view vectors.
+        Vv = vm(Dv, Wv).detach() # Dv is validation obj ids, Wv is validation view ids.
         rv_eval, imgs, covs = eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv)
 
         # 4. compute first-order Taylor expansion coefficient
@@ -284,7 +292,7 @@ def backprop_and_update(
     # for each minibatch
     for batch_i, data in enumerate(train_queue):
 
-        # subset data (data[-1] gives indices of datapoints in this minibatch)
+        # subset data: (data[-1] gives indices of datapoints in this minibatch)
         y = data[0]#.cuda()
         eps = Eps[data[-1]]
         _d = Dt[data[-1]]
