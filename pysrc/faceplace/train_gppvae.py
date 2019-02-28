@@ -256,7 +256,7 @@ def eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv):
         for batch_i, data in enumerate(val_queue):
             idxs = data[-1]#.cuda()
             Yv = data[0]#.cuda()
-            Zv = vae.encode(Yv)[0].detach()
+            Zv = vae.encode(Yv)[0].detach() # gets the mean (ignored z_sigma output)
             Yr = vae.decode(Zv)
             Yo = vae.decode(Zo[idxs])
             mse_out[idxs] = (

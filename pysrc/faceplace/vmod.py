@@ -87,13 +87,19 @@ class Vmodel(nn.Module):
         # That is, for ith datapoint, V_ijk is that datapoint's
         #   jth obj-feature-vector element multiplied by its kth
         #   view-feature-vector element.
+        # V is shape (N,p,q)
         V = torch.einsum("ij,ik->ijk", [X, W])
 
         # Reshape V to be (N, p*q)
         # Each row i corresponds to a datapoint
         V = V.reshape([V.shape[0], -1])
 
-        # i think we have computed the outer product of matrices X and W (kronecker product?)
+        # We have computed the formula in the footnote of the paper.
+        # that is, each column of V is the jth column of X multiplied by the kth column of W.
+
+        # So, we have used linear kernels for both object and view kernels
+
+        # We have achieved computing in linear time (i think)
 
         # V . V^T + I gives an NxN matrix (the approx covariance matrix??)
         return V
