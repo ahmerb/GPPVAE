@@ -1,7 +1,7 @@
 .DS_Store
 *.DS_Store
-pysrc/faceplace/data
-pysrc/faceplace/out
+data
+pysrc/**/out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
