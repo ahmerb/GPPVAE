@@ -30,7 +30,7 @@ parser.add_option(
     "--data",
     dest="data",
     type=str,
-    default="./data/data_faces.h5",
+    default="../../data/data_faces.h5",
     help="dataset path",
 )
 parser.add_option(
@@ -57,11 +57,11 @@ parser.add_option(
     "--epoch_cb",
     dest="epoch_cb",
     type=int,
-    default=100,
+    default=10,
     help="number of epoch by which a callback (plot + dump weights) is executed",
 )
 parser.add_option(
-    "--epochs", dest="epochs", type=int, default=10000, help="total number of epochs"
+    "--epochs", dest="epochs", type=int, default=100, help="total number of epochs"
 )
 parser.add_option("--debug", action="store_true", dest="debug", default=False)
 (opt, args) = parser.parse_args()
@@ -69,11 +69,11 @@ opt_dict = vars(opt)
 
 
 if opt.vae_cfg is None:
-    opt.vae_cfg = "./out/vae/vae.cfg.p"
+    opt.vae_cfg = "../faceplace/out/vae/vae.cfg.p"
 vae_cfg = pickle.load(open(opt.vae_cfg, "rb"))
 
 if opt.vae_weights is None:
-    opt.vae_weights = "./out/vae/weights/weights.00000.pt"
+    opt.vae_weights = "../faceplace/out/vae/weights/weights.00900.pt"
 
 if not os.path.exists(opt.outdir):
     os.makedirs(opt.outdir)
@@ -157,26 +157,32 @@ def main():
 
     history = {}
     for epoch in range(opt.epochs):
+        print('epoch start')
 
         # 1. encode Y in mini-batches
         Zm, Zs = encode_Y(vae, train_queue) # gets encodings (distrib params q(z|y=y)) for entire dataset
+        print('encodeY done')
 
         # 2. sample Z
         # sample a z for each encoding (zm,zs) above
         Eps = Variable(torch.randn(*Zs.shape), requires_grad=False)#.cuda()
         Z = Zm + Eps * Zs
+        print('sampleZ done')
 
         # 3. evaluation step (not needed for training)
         # run Vmodel on object and view training ids (entire training data?) to give us low-rank approx V for kernel K
         Vt = vm(Dt, Wt).detach() # Dt is training obj ids, Wt is training view ids. Vt is V in K=V*V^t+alpha*I (eqn 20 in paper), i.e. low rank aproximation for kernel
 
         Vv = vm(Dv, Wv).detach() # Dv is validation obj ids, Wv is validation view ids.
+        print('run vm done')
         rv_eval, imgs, covs = eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv)
+        print('eval step done')
 
         # 4. compute first-order Taylor expansion coefficient
         # evaluate a, B, c across all samples (which we used for Vt)?
         Zb, Vbs, vbs, gp_nll = gp.taylor_coeff(Z, [Vt])
         rv_eval["gp_nll"] = float(gp_nll.data.mean().cpu()) / vae.K
+        print('taylor coeff done')
 
         # 5. accumulate gradients over mini-batches and update params
         # use taylor series approx for the gp loss
@@ -194,6 +200,7 @@ def main():
             vae_optimizer,
             gp_optimizer,
         )
+        print('backprop and update done')
         rv_back["loss"] = (
             rv_back["recon_term"] + rv_eval["gp_nll"] + rv_back["pen_term"]
         )

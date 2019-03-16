@@ -6,20 +6,6 @@ import scipy as sp
 import os
 import pdb
 
-
-def normalize_rows(x):
-    # i think this does following:
-    #  multiplies x*x element-wise (sq each element),
-    #  then sums along each row,
-    #  then the [:, None] converts something like [sum1, sum2, ...]
-    #     into [ [sum1], [sum2], ... ]
-    diagonal = torch.einsum("ij,ij->i", [x, x])[:, None]
-
-    # divides each element by the sq root of the sum of its row elem's squared
-    # x[i][j] = x[i][j] / sum( x[i][j']^2 for x[i][j'] in x[i] )
-    return x / torch.sqrt(diagonal)
-
-
 class Vmodel(nn.Module):
     # P number of unique objects, denoted x, M dims.
     # Q number of unique   views, denoted w, R dims.
@@ -61,11 +47,14 @@ class Vmodel(nn.Module):
 
         self._init_params()
 
+        self.viewKernel = RotationKernel()
+        self.objKernel = LinearKernel()
+
     def x(self):
-        return normalize_rows(self.x0)
+        return self._normalize_rows(self.x0)
 
     def v(self):
-        return normalize_rows(self.v0)
+        return self._normalize_rows(self.v0)
 
     # d is vector of object id's (dim Nx1)
     # w is vector of   view id's (dim Nx1)
@@ -80,28 +69,40 @@ class Vmodel(nn.Module):
         # W is dim Nxq
         W = F.embedding(w, self.v())
 
-        # multiply
+        # compute K
+        K = self.viewKernel(W) * self.objKernel(X) # elem-wise mult
 
-        # V_ijk the product of scalars X_ij and W_ik.
-        # That is, V_ijk = X_ij * W_ik
-        # That is, for ith datapoint, V_ijk is that datapoint's
-        #   jth obj-feature-vector element multiplied by its kth
-        #   view-feature-vector element.
-        # V is shape (N,p,q)
-        V = torch.einsum("ij,ik->ijk", [X, W])
+        # # eigendecomposition
+        # # evals (Nx2) is eigenvalues (e[:, 0] are real parts, e[:, 1] are imaginary parts)
+        # # evecs (NxN) are eigenvectors
+        # evals, evecs = torch.eig(K, eigenvectors=True)
 
-        # Reshape V to be (N, p*q)
-        # Each row i corresponds to a datapoint
-        V = V.reshape([V.shape[0], -1])
+        # # take the first (p*q) eigenvectors
+        # # todo: eigenvalues not necessarily returned in order
+        # p = X.size(1)
+        # q = W.size(1)
+        # N = X.size(0)
+        # k = min(p*q, N) # can't have higher than full rank....
+        # first_k_eigenvalues_sqrt = torch.diag(torch.sqrt(torch.abs(evals[:k, 0])))
+        # first_k_eigenvectors = evecs[:k]
 
-        # We have computed the formula in the footnote of the paper.
-        # that is, each column of V is the jth column of X multiplied by the kth column of W.
+        # # print(k)
+        # # print(evals)
+        # # print(torch.sqrt(evals[:k, 0]))
 
-        # So, we have used linear kernels for both object and view kernels
-
-        # We have achieved computing in linear time (i think)
-
-        # V . V^T + I gives an NxN matrix (the approx covariance matrix??)
+        # V = first_k_eigenvectors.t().mm(first_k_eigenvalues_sqrt)
+        # return V
+        print('begin svd')
+        U, S, V = torch.svd(K)
+        print('end svd')
+        p = X.size(1)
+        q = W.size(1)
+        N = X.size(0)
+        k = min(p*q, N) # can't have higher than full rank....
+        
+        # take first k singular values
+        Sprime = torch.diag(torch.sqrt((S[:k])))
+        V = U.mm(Sprime)
         return V
 
     def _init_params(self):
@@ -122,30 +123,74 @@ class Vmodel(nn.Module):
         # 3) set this to v0
         self.v0.data[:] = torch.eye(*self.v0.shape) + 1e-3 * torch.randn(*self.v0.shape)
 
+    def _normalize_rows(self, x):
+        # i think this does following:
+        #  multiplies x*x element-wise (sq each element),
+        #  then sums along each row,
+        #  then the [:, None] converts something like [sum1, sum2, ...]
+        #     into [ [sum1], [sum2], ... ]
+        diagonal = torch.einsum("ij,ij->i", [x, x])[:, None]
+
+        # divides each element by the sq root of the sum of its row elem's squared
+        # x[i][j] = x[i][j] / sum( x[i][j']^2 for x[i][j'] in x[i] )
+        return x / torch.sqrt(diagonal)
+
 
 if __name__ == "__main__":
+    P = 5 # number uniq objs
+    Q = 3 # number uniq views
+    p = 3 # obj dim
+    q = 5 # view dim
 
-    P = 4
-    Q = 4
-    p = 2
-    q = 2
+    vm = Vmodel(P, Q, p, q)
 
-    #pdb.set_trace()
+    # select d and w ids
+    d = torch.randn([20]).clamp(min=1, max=P).long() # N=20
+    w = torch.randn([20]).clamp(min=1, max=Q).long()
 
-    vm = Vmodel(P, Q, p, q)#.cuda()
+    # manually compute K
+    X = F.embedding(d, vm.x())
+    W = F.embedding(w, vm.v())
+    K = vm.viewKernel(W) * vm.objKernel(X)
 
-    # _d and _w
-    _d = sp.kron(sp.arange(P), sp.ones(2))
-    _w = sp.kron(sp.ones(2), sp.arange(Q))
-
-    # d and w
-    d = Variable(torch.Tensor(_d).long(), requires_grad=False)#.cuda()
-    w = Variable(torch.Tensor(_w).long(), requires_grad=False)#.cuda()
-
-    print(d.size())
-    print(w.size())
+    # find output and compare to K
     V = vm(d, w)
-    print(V.size())
+
+    print('***\n')
+    print(K - V.mm(V.t()))
+    print('***\n')
+    print(K)
+    print('***\n')
+    print(V)
+
+
+
+
+
+
+# if __name__ == "__main__":
+
+    # P = 4
+    # Q = 4
+    # p = 2
+    # q = 2
+
+    # #pdb.set_trace()
+
+    # vm = Vmodel(P, Q, p, q)#.cuda()
+
+    # # _d and _w
+    # _d = sp.kron(sp.arange(P), sp.ones(2))
+    # _w = sp.kron(sp.ones(2), sp.arange(Q))
+
+    # # d and w
+    # d = Variable(torch.Tensor(_d).long(), requires_grad=False)#.cuda()
+    # w = Variable(torch.Tensor(_w).long(), requires_grad=False)#.cuda()
+
+    # print(d.size())
+    # print(w.size())
+    # V = vm(d, w)
+    # print(V.size())
 
     #pdb.set_trace()
 

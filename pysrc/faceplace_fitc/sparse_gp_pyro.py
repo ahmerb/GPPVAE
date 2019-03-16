@@ -134,7 +134,7 @@ class SparseGPRegression(GPModel):
 
         # compute Kuu = k(Xu, Xu)
         Kuu = self.kernel(self.Xu).contiguous()
-        Kuu.view(-1)[::M + 1] += self.jitter  # add jitter to the diagonal
+        Kuu.view(-1)[::M + 1] += self.jitter  # add jitter to the diagonal, makes Cholesky decomposition more stable (apparently)
 
         # compute cholesky decomposition: Kuu = Luu * Luu^T 
         Luu = Kuu.cholesky()
@@ -155,13 +155,14 @@ class SparseGPRegression(GPModel):
             Kffdiag = self.kernel(self.X, diag=True)
 
             # square each element, sum over each row of matrix
-            # i think Qff equals the approx for Kff, i.e. Kfu * Kuu^-1 * Kfu^T ??
-            Qffdiag = W.pow(2).sum(dim=-1)
+            # Qff=W@W^T equals the approx for Kff, i.e. Kfu * Kuu^-1 * Kfu^T
+            Qffdiag = W.pow(2).sum(dim=-1) # computes diagonal of Qff = W @ W^T
             if self.approx == "FITC":
-                # D = D + Kff - Qff
-                # I think D == Λ.
-                # we are computing p̃(y|X,Xu) = N(y|0, Kfu*Kuu^-1*Kfu^T + Λ + sigma^2 * I),
-                #   where Λ = (Kff -  Kfu*Kuu^-1*Kfu^T) <*> I, [where <*> denotes elem-wise multiplication].
+                # D = noise*I + Λ
+                # D = noise*I + Kffdiag - Qffdiag
+                # we are computing diagonal addition (Λ + sigma^2 * I) to the covariance in
+                #  p̃(y|X,Xu) = N(y|0, Kfu*Kuu^-1*Kfu^T + Λ + sigma^2 * I),
+                #  where Λ = (Kff -  Kfu*Kuu^-1*Kfu^T) <*> I, [where <*> denotes elem-wise multiplication].
                 # note that the above formula for Λ reduces to 1d computation as only elements on the diagonal are required
                 D = D + Kffdiag - Qffdiag
 
@@ -175,8 +176,8 @@ class SparseGPRegression(GPModel):
 
         # finish computing p̃(y|X,Xu) = N(y|0, Kfu*Kuu^-1*Kfu^T + Λ + sigma^2 * I)
         if self.y is None:
-            # recall Qff = Kfu*Kuu^-1*Kfu^T = `W.pow(2).sum(dim=-1)`,
-            # so we just need to add it to D to get the covariance matrix out
+            # recall Qff = Kfu*Kuu^-1*Kfu^T = W @ W^T = `W.pow(2).sum(dim=-1)`,
+            # so we just need to to do Qff+D=W@W^T+D to get the full covariance matrix
             f_var = D + W.pow(2).sum(dim=-1)
 
             # return the mean and covariance for p̃(y|X,Xu)
@@ -188,7 +189,7 @@ class SparseGPRegression(GPModel):
                 pyro.sample("trace_term", dist.Bernoulli(probs=torch.exp(-trace_term / 2.)),
                             obs=trace_term.new_tensor(1.))
 
-            # FITC case (and maybe other algos too)
+            # FITC case (and DTC)
             return pyro.sample("y",
                                dist.LowRankMultivariateNormal(f_loc, W, D)
                                    .expand_by(self.y.shape[:-1])
