@@ -4,11 +4,12 @@ from torch.nn import Parameter
 import torch.distributions as dists
 import math # to compute the constant log(2*pi)
 import matplotlib.pyplot as pl
+import numpy as np
 
 from kernels import RotationKernel
 
 class SparseGPRegression(nn.Module):
-    def __init__(self, X, y, kernel, Xu, mean_function=None, noise=1.):
+    def __init__(self, X, y, kernel, Xu, mean_function=None, noise=0.5):
         super(SparseGPRegression, self).__init__()
         self.X = X
         self.y = y
@@ -17,7 +18,7 @@ class SparseGPRegression(nn.Module):
         self.mean_function = mean_function if mean_function is not None else self._zero_mean_function
         self.noise = Parameter(Xu.new_tensor(noise))
 
-        self.jitter = 1e-6 # stablise Cholesky decompositions
+        self.jitter = 1e-3 # stablise Cholesky decompositions
 
     def _zero_mean_function(self, x):
         return x.new_zeros(x.shape) # creates zero tensor with same shape, dtype, etc...
@@ -166,50 +167,34 @@ class SparseGPRegression(nn.Module):
 
     def predict_and_plot(self, Xnew, nsamples=3):
         N = Xnew.shape[0]
-        mu, cov = self.posterior_predictive(Xnew)
+        mu, cov = self.posterior_predictive(Xnew, full_cov=True)
 
         # L = stddev = sqrt(cov) = cholesky(cov)
-        L = torch.cholesky(self._add_jitter(cov.contiguous()))
+        L = torch.cholesky(cov + self.jitter * torch.eye(N, N))
 
         # draw samples from posterior
-        f_posterior = mu + L.mm(torch.normal(mu=torch.zeros(nsamples, N), stdev=torch.ones(N)))
+        f_posterior = (mu + L.mm(torch.normal(mean=torch.zeros(nsamples, N), std=torch.ones(nsamples, N)).t()).t()).t()
         
-        pl.plot(self.X, self.y, 'bs', ms=8)
-        pl.plot(Xnew, f_posterior)
-        pl.gca().fill_between(Xnew, mu-2*L.diag(), mu+2*L.diag(), color="#dddddd")
-        pl.plot(Xnew, mu, 'r--', lw=2)
+        # convert to numpy
+        numpy = {
+            'X': self.X.detach().numpy(),
+            'Xnew': Xnew.detach().numpy(),
+            'mu': mu.detach().numpy(),
+            'y': self.y.detach().numpy(),
+            'f_posterior': f_posterior.detach().numpy(),
+            'Ldiag': L.detach().diag().numpy(),
+            'Xu': self.Xu.detach().numpy()
+        }
+
+        pl.plot(numpy['X'], numpy['y'], 'bs', ms=8)
+        pl.plot(numpy['Xnew'], numpy['f_posterior'])
+        pl.gca().fill_between(numpy['Xnew'], numpy['mu']-2*numpy['Ldiag'], numpy['mu']+2*numpy['Ldiag'], color="#dddddd")
+        pl.plot(numpy['Xnew'], numpy['mu'], 'r-', lw=2)
+        pl.plot(numpy['Xu'], np.zeros(numpy['Xu'].shape[-1]) + pl.ylim()[0], 'r^')
         pl.title('{} Samples from GP Posterior'.format(nsamples))
         pl.show()
-
-# # Noiseless training data
-# Xtrain = np.array([-4, -3, -2, -1, 1]).reshape(5,1)
-# ytrain = np.sin(Xtrain)
-
-# # Apply the kernel function to our training points
-# K = kernel(Xtrain, Xtrain, param)
-# L = np.linalg.cholesky(K + 0.00005*np.eye(len(Xtrain)))
-
-# # Compute the mean at our test points.
-# K_s = kernel(Xtrain, Xtest, param)
-# Lk = np.linalg.solve(L, K_s)
-# mu = np.dot(Lk.T, np.linalg.solve(L, ytrain)).reshape((n,))
-
-# # Compute the standard deviation so we can plot it
-# s2 = np.diag(K_ss) - np.sum(Lk**2, axis=0)
-# stdv = np.sqrt(s2)
-# # Draw samples from the posterior at our test points.
-# L = np.linalg.cholesky(K_ss + 1e-6*np.eye(n) - np.dot(Lk.T, Lk))
-# f_post = mu.reshape(-1,1) + np.dot(L, np.random.normal(size=(n,3)))
-
-# pl.plot(Xtrain, ytrain, 'bs', ms=8)
-# pl.plot(Xtest, f_post)
-# pl.gca().fill_between(Xtest.flat, mu-2*stdv, mu+2*stdv, color="#dddddd")
-# pl.plot(Xtest, mu, 'r--', lw=2)
-# pl.axis([-5, 5, -3, 3])
-# pl.title('Three samples from the GP posterior')
-# pl.show()
     
-    # NOTE this is adapted from Pyro v0.21 pyro.contrib.gp.models.SparseGPRegression#forward
+    # NOTE this is from Pyro v0.21 pyro.contrib.gp.models.SparseGPRegression#forward
     def posterior_predictive(self, Xnew, full_cov=False, noiseless=True):
         r"""
         Computes the mean and covariance matrix (or variance) of Gaussian Process
@@ -319,17 +304,19 @@ class SparseGPRegression(nn.Module):
                              "shape of features, but got {} and {}."
                              .format(self.X.shape[1:], Xnew.shape[1:]))
 
+
+
 def testStuff():
-    N = 50
+    N = 100
     X = dists.Uniform(0.0, 5.0).sample(sample_shape=(N,))
     y = 0.5 * torch.sin(3*X) + dists.Normal(0.0, 0.2).sample(sample_shape=(N,))
-    Xu = torch.arange(20.) / 4.0
+    Xu = torch.linspace(0.1, 4.9, 7)
 
     sgpr = SparseGPRegression(X, y, RotationKernel, Xu)
 
     optimizer = torch.optim.Adam(sgpr.parameters(), lr=0.005)
 
-    n_steps = 100
+    n_steps = 400
     losses = []
     print("begin training")
     for i in range(n_steps):
@@ -346,8 +333,3 @@ def testStuff():
 
 if __name__ == "__main__":
     testStuff()
-
-
-
-
-
