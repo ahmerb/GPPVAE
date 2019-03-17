@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.nn import Parameter
 import torch.distributions as dists
 import math # to compute the constant log(2*pi)
+import matplotlib.pyplot as pl
 
 from kernels import RotationKernel
 
@@ -34,31 +35,40 @@ class SparseGPRegression(nn.Module):
         # number of inducing inputs
         M = self.Xu.size(0)
 
-        Kfu = self.kernel(self.X, self.Xu)
-        Kuu = self.kernel(self.Xu, self.Xu)
+        Kfu = self.kernel(self.X, self.Xu) # NxM
+        Kuu = self.kernel(self.Xu, self.Xu) # MxM
         
-        Luu = Kuu.cholesky(upper=False)
-        W = torch.trtrs(Kfu.t(), Luu, upper=False)[0].t()
+        Luu = Kuu.cholesky(upper=False) # MxM
+        W = torch.trtrs(Kfu.t(), Luu, upper=False)[0].t() # NxM
+        # W.T = LuuInv @ Kuf
+        # MxN     MxM    MxN
 
         # computes diagonal of Qff = Kfu @ KuuInv @ Kuf = W @ W.T
-        Qffdiag = W.pow(2).sum(dim=-1) 
+        Qffdiag = W.pow(2).sum(dim=-1) # NxN
 
-        Kffdiag = self.kernel(self.X, self.X, diag=True)
+        Kffdiag = self.kernel(self.X, self.X, diag=True) # NxN
 
-        noise_diag = self.noise.expand(N)
+        noise_diag = self.noise.expand(N) # NxN
 
         # The total covariance is
         # Σ = Qff + (Kff - Qff).diag() + noise*I = Qff + D
 
-        D = Kffdiag - Qffdiag + noise_diag
+        D = Kffdiag - Qffdiag + noise_diag # NxN (represented by torch.Size([N]))
 
         # mean
-        mu = self.mean_function(self.X)
+        mu = self.mean_function(self.y) # Nx1 (represented by torch.Size([N]))
 
         return self.low_rank_log_likelihood(mu, W.t(), D) # W.t() is mxn
 
     def low_rank_log_likelihood(self, mu, W, D):
-        """find logp(y|0,cov) where cov = W @ W.T + D"""
+        """
+        Find logp(y|mu,cov) where cov = W @ W.T + D
+
+        :param  torch.Tensor mu: tensor with size([N]) that represents Nx1 mean vector
+        :param  torch.Tensor  W: MxN matrix
+        :param  torch.Tensor  D: tensor with size([N]) that represents an NxN diagonal matrix
+        :return torch.Tensor: tensor with size([]) that gives logp(y|mu,cov)
+        """
         M = W.shape[0]
         N = W.shape[1]
         y = self.y - mu # Do this to compute the Mahalanobis distance correctly
@@ -79,12 +89,12 @@ class SparseGPRegression(nn.Module):
         #    Σ =  W @ W.T + D
         #      = (W @ Dinv @ W.T + I) @ D  (divide by D)
         #      := K @ D
-        W_Dinv = W / D
-        K = W_Dinv.mm(W.t()) + torch.eye(M, M)
+        W_Dinv = W / D # MxN
+        K = W_Dinv.mm(W.t()) + torch.eye(M, M) # MxM
 
         # Compute cholesky decomposition K = L @ L.T
         # where L is lower triangular
-        L = torch.cholesky(K, upper=False)
+        L = torch.cholesky(K, upper=False) # MxM
 
         # Note that
         # log|Σ|
@@ -102,15 +112,15 @@ class SparseGPRegression(nn.Module):
         #     = log(L_11^2) + ... + log(L_NN^2)
         #     = 2log(L_11) + ... + 2log(L_NN)
         #     = 2 * \Sigma{log(L_ii)}
-        logdetK = 2 * L.diag().log().sum()
+        logdetK = 2 * L.diag().log().sum() # scalar, size([])
 
         # b) log|D|
         #     = log(D_1 * D_2 * ... * D_N)
         #     = log(D_1) + ... + log(D_2)
         #     = \Sigma{log(D_i)}
-        logdetD = D.log().sum()
+        logdetD = D.log().sum() # scalar, size([]) 
 
-        logdetCov = logdetK + logdetD
+        logdetCov = logdetK + logdetD # scalar, size([])
 
         # 2) Now we compute the Mahalanobis distance MDIST(y,N(y|0, Σ)) = 0.5 * y.T * inv(Σ) * y
         # First, apply the Woodbury identity to inv(Σ) gives:
@@ -125,30 +135,30 @@ class SparseGPRegression(nn.Module):
         # Note how inv(D) is trivial as D is diagonal
 
         # a) compute Linv_W_Dinv_y.T @ Linv_W_Dinv_y
-        W_Dinv_y = W_Dinv.mm(y)
+        # y.unsqueeze(1) converts is from size([N]) to size([N,1])
+        W_Dinv_y = W_Dinv.mm(y.unsqueeze(1)) # Mx1
         
         # Linv_W_Dinv_y is the matrix M that solves eqn
         # LM = W_Dinv_y
-        Linv_W_Dinv_y = torch.trtrs(W_Dinv_y, L, upper=False)[0]
+        Linv_W_Dinv_y = torch.trtrs(W_Dinv_y, L, upper=False)[0] # Mx1
 
-        mdist1 = (Linv_W_Dinv_y * Linv_W_Dinv_y).sum(-1)
+        mdist1 = (Linv_W_Dinv_y * Linv_W_Dinv_y).sum() # scalar, size([])
 
         # b) compute y.T @ inv(D) @ y
-        mdist2 = ((y * y) / D)
+        mdist2 = ((y * y) / D).sum() # scalar, size([])
 
         # total mdist^2
-        mdist_squared = mdist1 - mdist2
+        mdist_squared = mdist1 - mdist2 # scalar, size([])
 
         # Finally, compute the total logp(y|X,Xu)
         #   = -0.5log(2*pi) - 0.5log|Σ| - 0.5*MDIST(y,N(y|0, Σ))^2
         norm_const = math.log(2 * math.pi)
-        logprob = -0.5 * (norm_const + logdetCov + mdist_squared)
+        logprob = -0.5 * (norm_const + logdetCov + mdist_squared) # scalar, size([])
 
         return logprob
 
-
-if __name__ == "__main__":
-    N = 1000
+def testStuff():
+    N = 50
     X = dists.Uniform(0.0, 5.0).sample(sample_shape=(N,))
     y = 0.5 * torch.sin(3*X) + dists.Normal(0.0, 0.2).sample(sample_shape=(N,))
     Xu = torch.arange(20.) / 4.0
@@ -157,16 +167,22 @@ if __name__ == "__main__":
 
     optimizer = torch.optim.Adam(sgpr.parameters(), lr=0.005)
 
-    n_steps = 100
+    n_steps = 500
     losses = []
+    print("begin training")
     for i in range(n_steps):
         optimizer.zero_grad()
         loss = -sgpr()
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
+        print("epoch {}: loss={}".format(i, loss.item()))
 
     print(losses)
+
+
+if __name__ == "__main__":
+    testStuff()
 
 
 
