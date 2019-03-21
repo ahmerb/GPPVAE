@@ -23,6 +23,16 @@ class SparseGPRegression(nn.Module):
     def _zero_mean_function(self, x):
         return x.new_zeros(x.shape) # creates zero tensor with same shape, dtype, etc...
 
+    def _cholesky(self, M, upper=False):
+        while True:
+            try:
+                self._add_jitter(M)
+                T = torch.cholesky(M, upper=upper)
+                return T
+            except RuntimeError as error:
+                print("Cholesky failed, retrying.")
+                print(error)
+
     def _add_jitter(self, matrix):
         matrix.view(-1)[::(matrix.shape[0]) + 1] += self.jitter
 
@@ -45,7 +55,7 @@ class SparseGPRegression(nn.Module):
         Kuu = self.kernel(self.Xu, self.Xu) # MxM
         
         self._add_jitter(Kuu)
-        Luu = torch.cholesky(Kuu, upper=False) # MxM
+        Luu = self._cholesky(Kuu) # MxM
         W = torch.trtrs(Kfu.t(), Luu, upper=False)[0].t() # NxM
         # W.T = LuuInv @ Kuf
         # MxN     MxM    MxN
@@ -102,7 +112,7 @@ class SparseGPRegression(nn.Module):
 
         # Compute cholesky decomposition K = L @ L.T
         # where L is lower triangular
-        L = torch.cholesky(K, upper=False) # MxM
+        L = self._cholesky(K, upper=False) # MxM
 
         # Note that
         # log|Σ|
@@ -170,7 +180,7 @@ class SparseGPRegression(nn.Module):
         mu, cov = self.posterior_predictive(Xnew, full_cov=True)
 
         # L = stddev = sqrt(cov) = cholesky(cov)
-        L = torch.cholesky(cov + self.jitter * torch.eye(N, N))
+        L = self._cholesky(cov)
 
         # draw samples from posterior
         f_posterior = (mu + L.mm(torch.normal(mean=torch.zeros(nsamples, N), std=torch.ones(nsamples, N)).t()).t()).t()
@@ -193,7 +203,7 @@ class SparseGPRegression(nn.Module):
         pl.plot(numpy['Xu'], np.zeros(numpy['Xu'].shape[-1]) + pl.ylim()[0], 'r^')
         pl.title('{} Samples from GP Posterior'.format(nsamples))
         pl.show()
-    
+
     # NOTE this is from Pyro v0.21 pyro.contrib.gp.models.SparseGPRegression#forward
     def posterior_predictive(self, Xnew, full_cov=False, noiseless=True):
         r"""
@@ -236,8 +246,7 @@ class SparseGPRegression(nn.Module):
         # TODO: cache these calculations to get faster inference
 
         Kuu = self.kernel(self.Xu).contiguous()
-        Kuu.view(-1)[::M + 1] += self.jitter  # add jitter to the diagonal
-        Luu = Kuu.cholesky()
+        Luu = self._cholesky(Kuu)
 
         Kuf = self.kernel(self.Xu, self.X)
 
@@ -250,7 +259,7 @@ class SparseGPRegression(nn.Module):
         W_Dinv = W / D
         K = W_Dinv.matmul(W.t()).contiguous()
         K.view(-1)[::M + 1] += 1  # add identity matrix to K
-        L = K.cholesky()
+        L = self._cholesky(K)
 
         # get y_residual and convert it into 2D tensor for packing
         y_residual = self.y - self.mean_function(self.X)
@@ -308,9 +317,10 @@ class SparseGPRegression(nn.Module):
 
 def testStuff():
     N = 100
+    M = 7
     X = dists.Uniform(0.0, 5.0).sample(sample_shape=(N,))
     y = 0.5 * torch.sin(3*X) + dists.Normal(0.0, 0.2).sample(sample_shape=(N,))
-    Xu = torch.linspace(0.1, 4.9, 7)
+    Xu = torch.linspace(0.1, 4.9, M)
 
     sgpr = SparseGPRegression(X, y, RotationKernel, Xu)
 
