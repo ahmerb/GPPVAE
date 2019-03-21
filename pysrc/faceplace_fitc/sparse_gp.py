@@ -12,37 +12,36 @@ class SparseGPRegression(nn.Module):
     def __init__(self, X, y, kernel, Xu, mean_function=None, noise=0.5):
         super(SparseGPRegression, self).__init__()
         self.X = X
+        self.train_points = (X,)
         self.y = y
         self.Xu = Parameter(Xu)
         self.kernel = kernel()
         self.mean_function = mean_function if mean_function is not None else self._zero_mean_function
         self.noise = Parameter(Xu.new_tensor(noise))
-
         self.jitter = 1e-3 # stablise Cholesky decompositions
 
-    def _zero_mean_function(self, x):
-        return x.new_zeros(x.shape) # creates zero tensor with same shape, dtype, etc...
+    def Kfu(self):
+        return self.kernel(self.X, self.Xu) # NxM
+    
+    def Kuu(self):
+        return self.kernel(self.Xu) # MxM
 
-    def _cholesky(self, M, upper=False):
-        while True:
-            try:
-                self._add_jitter(M)
-                T = torch.cholesky(M, upper=upper)
-                return T
-            except RuntimeError as error:
-                print("Cholesky failed, retrying.")
-                print(error)
+    def Kffdiag(self):
+        return self.kernel(self.X, self.X, diag=True) # NxN
 
-    def _add_jitter(self, matrix):
-        matrix.view(-1)[::(matrix.shape[0]) + 1] += self.jitter
+    def Kus(self, test_points):
+        Xnew = test_points
+        return self.kernel(self.Xu, Xnew)
 
-    def forward(self, predictive=False):
-        if predictive:
-            raise NotImplementedError()
-        else:
-            return self.forward_train()
+    def Kss(self, test_points):
+        Xnew = test_points
+        return self.kernel(Xnew)
 
-    def forward_train(self):
+    def Kssdiag(self, test_points):
+        Xnew = test_points
+        return self.kernel(Xnew, diag=True)
+
+    def forward(self):
         """Computes logp(y|X,Xu)"""
 
         # number of true data points
@@ -51,8 +50,9 @@ class SparseGPRegression(nn.Module):
         # number of inducing inputs
         M = self.Xu.size(0)
 
-        Kfu = self.kernel(self.X, self.Xu) # NxM
-        Kuu = self.kernel(self.Xu, self.Xu) # MxM
+        Kfu = self.Kfu()
+        Kuu = self.Kuu()
+        Kffdiag = self.Kffdiag()
         
         self._add_jitter(Kuu)
         Luu = self._cholesky(Kuu) # MxM
@@ -63,8 +63,6 @@ class SparseGPRegression(nn.Module):
         # computes diagonal of Qff = Kfu @ KuuInv @ Kuf = W @ W.T
         Qffdiag = W.pow(2).sum(dim=-1) # NxN
 
-        Kffdiag = self.kernel(self.X, self.X, diag=True) # NxN
-
         noise_diag = self.noise.expand(N) # NxN
 
         # The total covariance is
@@ -73,7 +71,7 @@ class SparseGPRegression(nn.Module):
         D = Kffdiag - Qffdiag + noise_diag # NxN (represented by torch.Size([N]))
 
         # mean
-        mu = self.mean_function(self.y) # Nx1 (represented by torch.Size([N]))
+        mu = self.mean_function(*self.train_points) # Nx1 (represented by torch.Size([N])) # TODO should be called on X not y?
 
         return self.low_rank_log_likelihood(mu, W.t(), D) # W.t() is mxn
 
@@ -203,9 +201,13 @@ class SparseGPRegression(nn.Module):
         pl.plot(numpy['Xu'], np.zeros(numpy['Xu'].shape[-1]) + pl.ylim()[0], 'r^')
         pl.title('{} Samples from GP Posterior'.format(nsamples))
         pl.show()
+    
+    def _get_num_test_points(self, test_points):
+        return test_points.size(0)
 
+    # in dual case, test_points is tuple (Xnew, Wnew)
     # NOTE this is from Pyro v0.21 pyro.contrib.gp.models.SparseGPRegression#forward
-    def posterior_predictive(self, Xnew, full_cov=False, noiseless=True):
+    def posterior_predictive(self, test_points, full_cov=False, noiseless=True):
         r"""
         Computes the mean and covariance matrix (or variance) of Gaussian Process
         posterior on a test input data :math:`X_{new}`:
@@ -225,7 +227,7 @@ class SparseGPRegression(nn.Module):
         :returns: loc and covariance matrix (or variance) of :math:`p(f^*(X_{new}))`
         :rtype: tuple(torch.Tensor, torch.Tensor)
         """
-        self._check_Xnew_shape(Xnew)
+        self._check_test_points_shape(test_points)
 
         # W = inv(Luu) @ Kuf
         # Ws = inv(Luu) @ Kus
@@ -245,14 +247,14 @@ class SparseGPRegression(nn.Module):
 
         # TODO: cache these calculations to get faster inference
 
-        Kuu = self.kernel(self.Xu).contiguous()
+        Kuu = self.Kuu().contiguous()
         Luu = self._cholesky(Kuu)
 
-        Kuf = self.kernel(self.Xu, self.X)
+        Kuf = self.Kfu().t()
 
         W = Kuf.trtrs(Luu, upper=False)[0]
         D = self.noise.expand(N)
-        Kffdiag = self.kernel(self.X, diag=True)
+        Kffdiag = self.Kffdiag()
         Qffdiag = W.pow(2).sum(dim=0)
         D = D + Kffdiag - Qffdiag
 
@@ -262,13 +264,13 @@ class SparseGPRegression(nn.Module):
         L = self._cholesky(K)
 
         # get y_residual and convert it into 2D tensor for packing
-        y_residual = self.y - self.mean_function(self.X)
+        y_residual = self.y - self.mean_function(*self.train_points)
         y_2D = y_residual.reshape(-1, N).t()
         W_Dinv_y = W_Dinv.matmul(y_2D)
 
         # End caching ----------
 
-        Kus = self.kernel(self.Xu, Xnew)
+        Kus = self.Kus(test_points)
         Ws = Kus.trtrs(Luu, upper=False)[0]
         pack = torch.cat((W_Dinv_y, Ws), dim=1)
         Linv_pack = pack.trtrs(L, upper=False)[0]
@@ -276,18 +278,18 @@ class SparseGPRegression(nn.Module):
         Linv_W_Dinv_y = Linv_pack[:, :W_Dinv_y.shape[1]]
         Linv_Ws = Linv_pack[:, W_Dinv_y.shape[1]:]
 
-        C = Xnew.size(0)
+        C = self._get_num_test_points(test_points)
         loc_shape = self.y.shape[:-1] + (C,)
         loc = Linv_W_Dinv_y.t().matmul(Linv_Ws).reshape(loc_shape)
 
         if full_cov:
-            Kss = self.kernel(Xnew).contiguous()
+            Kss = self.Kss(test_points).contiguous()
             if not noiseless:
                 Kss.view(-1)[::C + 1] += self.noise  # add noise to the diagonal
             Qss = Ws.t().matmul(Ws)
             cov = Kss - Qss + Linv_Ws.t().matmul(Linv_Ws)
         else:
-            Kssdiag = self.kernel(Xnew, diag=True)
+            Kssdiag = self.Kssdiag(test_points)
             if not noiseless:
                 Kssdiag = Kssdiag + self.noise
             Qssdiag = Ws.pow(2).sum(dim=0)
@@ -296,37 +298,54 @@ class SparseGPRegression(nn.Module):
         cov_shape = self.y.shape[:-1] + (C, C)
         cov = cov.expand(cov_shape)
 
-        return loc + self.mean_function(Xnew), cov
+        mu = self.mean_function(*test_points) if type(test_points) == tuple else self.mean_function(test_points)
+        return loc + mu, cov
 
-    def _check_Xnew_shape(self, Xnew):
+    def _zero_mean_function(self, x):
+        return x.new_zeros(x.shape) # creates zero tensor with same shape, dtype, etc...
+
+    def _cholesky(self, M, upper=False):
+        while True:
+            try:
+                # keep adding jitter until it works
+                self._add_jitter(M)
+                T = torch.cholesky(M, upper=upper)
+                return T
+            except RuntimeError as error:
+                print("Cholesky failed, retrying.")
+                print(error)
+
+    def _add_jitter(self, matrix):
+        matrix.view(-1)[::(matrix.shape[0]) + 1] += self.jitter
+
+    def _check_test_points_shape(self, test_points):
         """
         Checks the correction of the shape of new data.
-        :param torch.Tensor Xnew: A input data for testing. Note that
-            ``Xnew.shape[1:]`` must be the same as ``self.X.shape[1:]``.
+        :param torch.Tensor test_points: A input data for testing. Note that
+            ``test_points.shape[1:]`` must be the same as ``self.X.shape[1:]``.
         """
-        if Xnew.dim() != self.X.dim():
+        if test_points.dim() != self.X.dim():
             raise ValueError("Train data and test data should have the same "
                              "number of dimensions, but got {} and {}."
-                             .format(self.X.dim(), Xnew.dim()))
-        if self.X.shape[1:] != Xnew.shape[1:]:
+                             .format(self.X.dim(), test_points.dim()))
+        if self.X.shape[1:] != test_points.shape[1:]:
             raise ValueError("Train data and test data should have the same "
                              "shape of features, but got {} and {}."
-                             .format(self.X.shape[1:], Xnew.shape[1:]))
-
+                             .format(self.X.shape[1:], test_points.shape[1:]))
 
 
 def testStuff():
     N = 100
     M = 7
     X = dists.Uniform(0.0, 5.0).sample(sample_shape=(N,))
-    y = 0.5 * torch.sin(3*X) + dists.Normal(0.0, 0.2).sample(sample_shape=(N,))
+    y = 0.5 * torch.sin(3*X) + dists.Normal(0.0, 0.1).sample(sample_shape=(N,))
     Xu = torch.linspace(0.1, 4.9, M)
 
     sgpr = SparseGPRegression(X, y, RotationKernel, Xu)
 
     optimizer = torch.optim.Adam(sgpr.parameters(), lr=0.005)
 
-    n_steps = 400
+    n_steps = 10
     losses = []
     print("begin training")
     for i in range(n_steps):
