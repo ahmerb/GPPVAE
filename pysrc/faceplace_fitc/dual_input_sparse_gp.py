@@ -8,8 +8,6 @@ import numpy as np
 from sparse_gp import SparseGPRegression
 from kernels import RotationKernel, LinearKernel
 
-# TODO make mean function work for dual input and single input
-
 class KernelComposer():
     @staticmethod
     def Product(K1, K2):
