@@ -72,10 +72,19 @@ class DualInputSparseGPRegression(SparseGPRegression):
                              "number of samples, but got {} and {}."
                              .format(Xnew.size(0), Wnew.size(0)))
         super(DualInputSparseGPRegression, self)._check_test_points_shape(Xnew)
-        super(DualInputSparseGPRegression, self)._check_test_points_shape(Wnew)
+        if Wnew.dim() != self.W.dim():
+            raise ValueError("Train data and test data should have the same "
+                             "number of dimensions, but got {} and {}."
+                             .format(self.W.dim(), Wnew.dim()))
+        if self.W.shape[1:] != Wnew.shape[1:]:
+            raise ValueError("Train data and test data should have the same "
+                             "shape of features, but got {} and {}."
+                             .format(self.W.shape[1:], Wnew.shape[1:]))
 
     def _zero_mean_function(self, x, w):
-        return x.new_zeros(x.shape)
+        N = x.shape[0] # num inputs, also equals w.shape[0]
+        L = self.y.shape[1] # output dimension
+        return x.new_zeros(N, L)
 
     def posterior_predictive(self, Xnew, Wnew, full_cov=False, noiseless=True):
         test_points = (Xnew, Wnew)
@@ -147,5 +156,49 @@ def testStuff():
     Wtest = torch.linspace(-5.0, 11, 10)
     sgpr.predict_and_plot(Xtest, Wtest)
 
+def testStuff2():
+    # multiple-dimension input and output (redefine D as Xdim and define O as num inducing points)
+    N = 100 # num samples
+    O = 7   # num inducing points
+
+    D = 10  # X dim
+    R = 4   # W dim
+    L = 5   # Y dim
+
+    # sample training data
+    X = dists.Uniform(-10.0, 10.0).sample(sample_shape=(N, D))
+    W = dists.Uniform(-20.0,  7.0).sample(sample_shape=(N, R))
+    # just do some random matmuls with ones to make the matrix shapes work
+    Y = torch.sin(3*X).t().mm(torch.cos(2*W)).mm(torch.ones(R, N)).t().mm(torch.ones(D, L)) + dists.Normal(0.0, 0.3).sample(sample_shape=(N, L))
+
+    # init inducing points
+    Xu = torch.linspace(-9.99, 9.99, O).expand(D, O).t() # OxD
+    Wu = torch.linspace(-19.9, 6.99, O).expand(R, O).t() # OxR
+
+    sgpr = DualInputSparseGPRegression(X, W, Y, RotationKernel, RotationKernel, KernelComposer.Product, Xu, Wu)
+    optimizer = torch.optim.Adam(sgpr.parameters(), lr=0.005)
+
+    n_steps = 10
+    losses = []
+    print("begin training")
+    for i in range(n_steps):
+        optimizer.zero_grad()
+        loss = -sgpr()
+        loss.backward()
+        optimizer.step()
+        losses.append(loss.item())
+        print("epoch {}: loss={}".format(i, loss.item()))
+    print("training complete")
+
+    # eval, posterior predictive (5 test points)
+    Ntest = 5
+    Xtest = dists.Uniform(-10.0, 10.0).sample(sample_shape=(Ntest, D))
+    Wtest = dists.Uniform(-20.0,  7.0).sample(sample_shape=(Ntest, R))
+    Ftest = torch.sin(3*Xtest).t().mm(torch.cos(2*Wtest)).mm(torch.ones(R, Ntest)).t().mm(torch.ones(D, L))
+
+    Fpred = sgpr.posterior_predictive(Xtest, Wtest)
+    print("MSE = ", torch.dist(Ftest, Fpred))
+
+
 if __name__ == "__main__":
-    testStuff()
+    testStuff2()

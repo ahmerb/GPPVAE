@@ -110,7 +110,7 @@ class LowRankMultivariateNormal(TorchDistribution):
 
         logdet = 2 * L.diag().log().sum() + D.log().sum()
 
-        mahalanobis1 = (y * y / D).sum(-1)
+        mahalanobis1 = (y * y / D).sum(-1) # sum(-1) sums along innermost dimension, i.e. sum's each arr[i][*], i.e. along each row
         mahalanobis2 = (Linv_W_Dinv_y * Linv_W_Dinv_y).sum(-1)
         mahalanobis_squared = mahalanobis1 - mahalanobis2 + trace_term
 

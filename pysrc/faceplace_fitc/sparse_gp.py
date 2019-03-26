@@ -54,7 +54,6 @@ class SparseGPRegression(nn.Module):
         Kuu = self.Kuu()
         Kffdiag = self.Kffdiag()
         
-        self._add_jitter(Kuu)
         Luu = self._cholesky(Kuu) # MxM
         W = torch.trtrs(Kfu.t(), Luu, upper=False)[0].t() # NxM
         # W.T = LuuInv @ Kuf
@@ -71,18 +70,18 @@ class SparseGPRegression(nn.Module):
         D = Kffdiag - Qffdiag + noise_diag # NxN (represented by torch.Size([N]))
 
         # mean
-        mu = self.mean_function(*self.train_points) # Nx1 (represented by torch.Size([N])) # TODO should be called on X not y?
+        mu = self.mean_function(*self.train_points) # NxL (L is Y dim)
 
-        return self.low_rank_log_likelihood(mu, W.t(), D) # W.t() is mxn
+        return self.low_rank_log_likelihood(mu, W.t(), D) # W.t() is MxN
 
     def low_rank_log_likelihood(self, mu, W, D):
         """
         Find logp(y|mu,cov) where cov = W @ W.T + D
 
-        :param  torch.Tensor mu: tensor with size([N]) that represents Nx1 mean vector
+        :param  torch.Tensor mu: NxL mean vector
         :param  torch.Tensor  W: MxN matrix
         :param  torch.Tensor  D: tensor with size([N]) that represents an NxN diagonal matrix
-        :returns: tensor with size([]) that gives logp(y|mu,cov)
+        :returns: tensor with size([]) that gives the value logp(y|mu,cov)
         :rtype: torch.Tensor
         """
         M = W.shape[0]
@@ -150,18 +149,29 @@ class SparseGPRegression(nn.Module):
         #
         # Note how inv(D) is trivial as D is diagonal
 
+        # XXX the Mahalanobis distance in now LxL term?????
+        # (computations may now be wrong for y.dim()=2 instead of y.dim()=1)
+
         # a) compute Linv_W_Dinv_y.T @ Linv_W_Dinv_y
-        # y.unsqueeze(1) converts is from size([N]) to size([N,1])
-        W_Dinv_y = W_Dinv.mm(y.unsqueeze(1)) # Mx1
+
+        if y.dim() == 1:
+            # y.unsqueeze(1) converts is from size([N]) to size([N,1])
+            y = y.unsqueeze(1) # y is now NxL, with L=1
+
+        W_Dinv_y = W_Dinv.mm(y) # MxL
         
         # Linv_W_Dinv_y is the matrix M that solves eqn
         # LM = W_Dinv_y
-        Linv_W_Dinv_y = torch.trtrs(W_Dinv_y, L, upper=False)[0] # Mx1
+        Linv_W_Dinv_y = torch.trtrs(W_Dinv_y, L, upper=False)[0] # MxL
+        if y.dim() == 2:
+            Linv_W_Dinv_y = Linv_W_Dinv_y.t()
 
-        mdist1 = (Linv_W_Dinv_y * Linv_W_Dinv_y).sum() # scalar, size([])
+        mdist1 = (Linv_W_Dinv_y * Linv_W_Dinv_y).sum(-1) # scalar, size([])
 
         # b) compute y.T @ inv(D) @ y
-        mdist2 = ((y * y) / D).sum() # scalar, size([])
+        if y.dim() == 2:
+            y = y.t()
+        mdist2 = ((y * y) / D).sum(-1) # scalar, size([])
 
         # total mdist^2
         mdist_squared = mdist2 - mdist1 # scalar, size([])
@@ -170,8 +180,43 @@ class SparseGPRegression(nn.Module):
         #   = -0.5log(2*pi) - 0.5log|Σ| - 0.5*MDIST(y,N(y|0, Σ))^2
         norm_const = math.log(2 * math.pi)
         logprob = -0.5 * (norm_const + logdetCov + mdist_squared) # scalar, size([])
+        
+        return logprob.sum() # if L logprobs, then sum them
 
-        return logprob
+    def low_rank_log_likelihood_pyro_implementation(self, mu, W, D):
+        y = self.y - mu
+        y = y.t()
+
+        W_Dinv = W / D # divides each row by D
+        M = W.shape[0]
+        Id = torch.eye(M, M, out=W.new_empty(M, M))
+        K = Id + W_Dinv.matmul(W.t())
+        L = self._cholesky(K)
+        if y.dim() == 1:
+            W_Dinv_y = W_Dinv.matmul(y)
+        elif y.dim() == 2:
+            W_Dinv_y = W_Dinv.matmul(y.t()) # in pyro implementation, y is LxN, not NxL
+        else:
+            raise NotImplementedError("SparseMultivariateNormal distribution does not support "
+                                    "computing log_prob for a tensor with more than 2 dimensionals.")
+
+        Linv_W_Dinv_y = torch.trtrs(W_Dinv_y, L, upper=False)[0]
+        if y.dim() == 2:
+            Linv_W_Dinv_y = Linv_W_Dinv_y.t()
+
+        logdet = 2 * L.diag().log().sum() + D.log().sum()
+
+        mahalanobis1 = (y * y / D).sum(-1) # sum(-1) sums along innermost dimension, i.e. sum's each arr[i][*], i.e. along each row
+        mahalanobis2 = (Linv_W_Dinv_y * Linv_W_Dinv_y).sum(-1)
+        mahalanobis_squared = mahalanobis1 - mahalanobis2 #+ trace_term
+
+        # print(logdet)
+        # print(mahalanobis_squared)
+
+        norm_const = math.log(2 * math.pi)
+        logprob = -0.5 * (norm_const + logdet + mahalanobis_squared)
+        # print(logprob)
+        return logprob.sum()
 
     def predict_and_plot(self, Xnew, nsamples=3):
         N = Xnew.shape[0]
@@ -205,7 +250,7 @@ class SparseGPRegression(nn.Module):
     def _get_num_test_points(self, test_points):
         return test_points.size(0)
 
-    # in dual case, test_points is tuple (Xnew, Wnew)
+    # in dual input case, test_points is tuple (Xnew, Wnew)
     # NOTE this is from Pyro v0.21 pyro.contrib.gp.models.SparseGPRegression#forward
     def posterior_predictive(self, test_points, full_cov=False, noiseless=True):
         r"""
@@ -280,6 +325,8 @@ class SparseGPRegression(nn.Module):
 
         C = self._get_num_test_points(test_points)
         loc_shape = self.y.shape[:-1] + (C,)
+        print(loc_shape)
+        print(Linv_W_Dinv_y.t().matmul(Linv_Ws).shape)
         loc = Linv_W_Dinv_y.t().matmul(Linv_Ws).reshape(loc_shape)
 
         if full_cov:
