@@ -23,6 +23,7 @@ class KernelComposer():
 
 
 class DualInputSparseGPRegression(SparseGPRegression):
+    # TODO implement default Xu and Wu
     def __init__(self, X, W, y, x_kernel, w_kernel, kernel_composer, Xu, Wu, mean_function=None, noise=0.5):
         super(DualInputSparseGPRegression, self).__init__(X, y, x_kernel, Xu, mean_function=mean_function, noise=noise)
         self.x_kernel = self.kernel

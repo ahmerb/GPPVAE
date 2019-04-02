@@ -43,7 +43,7 @@ class Conv2dCellUp(nn.Module):
         self.conv2 = nn.Conv2d(no, no, kernel_size=ks, stride=1, padding=1)
 
     def forward(self, x):
-        x = F.upsample(x, scale_factor=2)
+        x = F.interpolate(x, scale_factor=2)
         x = f_act(self.conv1(x), act=self.act1)
         x = f_act(self.conv2(x), act=self.act2)
         return x

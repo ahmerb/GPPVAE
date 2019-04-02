@@ -1,28 +1,28 @@
+# flake8: noqa
+
 import matplotlib
 import sys
 
-matplotlib.use("Agg")
 import torch
 from torch import nn, optim
-import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from vae import FaceVAE
-from vmod import Vmodel
-from gp import GP
-import h5py
 import scipy as sp
 import os
 import pdb
 import logging
-import pylab as pl
 from utils import smartSum, smartAppendDict, smartAppend, export_scripts
 from callbacks import callback_gppvae
 from data_parser import read_face_data, FaceDataset
 from optparse import OptionParser
-import logging
 import pickle
-import time
+
+from kernels import RotationKernel
+from dual_input_sparse_gp import DualInputSparseGPRegression, KernelComposer
+from unobserved_feature_vectors import UnobservedFeatureVectors
+
+matplotlib.use("Qt5Agg")
 
 
 parser = OptionParser()
@@ -106,7 +106,6 @@ logging.info("opt = %s", opt)
 
 
 def main():
-
     torch.manual_seed(opt.seed)
 
     if opt.debug:
@@ -122,16 +121,19 @@ def main():
     train_queue = DataLoader(train_data, batch_size=opt.bs, shuffle=True)
     val_queue = DataLoader(val_data, batch_size=opt.bs, shuffle=False)
 
-    # longint view and object repr
-    # Dt (Dv) is a 1d arr, each element being an id of the person in the corresponding img
-    # Wt (Wv) is a 1d arr, each element being a number 0 to 8 representing rotation angle? (i think)
-    # so, these tensors just hold id's, not the object and feature vectors themselves (which are unobserved) (i think)
-    Dt = Variable(obj["train"][:, 0].long(), requires_grad=False)#.cuda()
-    Wt = Variable(view["train"][:, 0].long(), requires_grad=False)#.cuda()
-    Dv = Variable(obj["val"][:, 0].long(), requires_grad=False)#.cuda()
-    Wv = Variable(view["val"][:, 0].long(), requires_grad=False)#.cuda()
-    # print("Dv.size = ", Dv.size()); print(Dv); return
-    # print("Wv.size = ", Wv.size()); print(Wv); return
+    # convert images and auxillary data (obj and view id's) to long tensors
+    Dt = obj["train"][:, 0].long()
+    Wt = view["train"][:, 0].long()
+    Dv = obj["val"][:, 0].long()
+    Wv = view["val"][:, 0].long()
+
+    # number of unique object and views
+    P = sp.unique(obj["train"]).shape[0]
+    Q = sp.unique(view["train"]).shape[0]
+
+    # we have sparse gp's, so we now can use arbitrarily large object feature vec size (before it was limited)
+    Dt_features = UnobservedFeatureVectors(Dt, P, opt.xdim)
+    Wt_features = UnobservedFeatureVectors(Wt, Q, Q)
 
     # define VAE and optimizer
     vae = FaceVAE(**vae_cfg).to(device)
@@ -140,204 +142,88 @@ def main():
     vae.to(device)
 
     # define gp
-    P = sp.unique(obj["train"]).shape[0] # number unique obj's
-    Q = sp.unique(view["train"]).shape[0] # number unique views
-    vm = Vmodel(P, Q, opt.xdim, Q)#.cuda() # low-rank approx
-    gp = GP(n_rand_effs=1).to(device)
+
+    # init inducing inputs
+    M = 100 # num inducing points
+    with torch.no_grad():
+        Dt_min = torch.min(Dt)
+        Dt_max = torch.max(Dt)
+        Wt_min = torch.min(Wt)
+        Wt_max = torch.min(Wt)
+    Xu = torch.linspace(Dt_min, Dt_max, M).expand(opt.xdim, M).t()
+    Wu = torch.linspace(Wt_min, Wt_max, M).expand(Q, M).t()
+    gp = DualInputSparseGPRegression(Dt, Wt, None, RotationKernel, RotationKernel, KernelComposer.Product, Xu, Wu)
+    # todo change obj kernel to gaussian kernel
+
+    # put feature vec and gp params in one param-list
     gp_params = nn.ParameterList()
-    gp_params.extend(vm.parameters())
+    gp_params.extend(Dt_features.parameters())
+    gp_params.extend(Wt_features.parameters())
     gp_params.extend(gp.parameters())
 
     # define optimizers
     vae_optimizer = optim.Adam(vae.parameters(), lr=opt.vae_lr)
     gp_optimizer = optim.Adam(gp_params, lr=opt.gp_lr)
 
-    if opt.debug:
-        pdb.set_trace()
-
-    history = {}
+    # begin training
     for epoch in range(opt.epochs):
         print('epoch start')
 
-        # 1. encode Y in mini-batches
-        Zm, Zs = encode_Y(vae, train_queue) # gets encodings (distrib params q(z|y=y)) for entire dataset
-        print('encodeY done')
+        vae_optimizer.zero_grad()
+        gp_optimizer.zero_grad()
+        vae.train()
+        gp.train()
 
-        # 2. sample Z
-        # sample a z for each encoding (zm,zs) above
-        Eps = Variable(torch.randn(*Zs.shape), requires_grad=False)#.cuda()
-        Z = Zm + Eps * Zs
-        print('sampleZ done')
+        N = train_queue.dataset.Y.shape[0]
 
-        # 3. evaluation step (not needed for training)
-        # run Vmodel on object and view training ids (entire training data?) to give us low-rank approx V for kernel K
-        Vt = vm(Dt, Wt).detach() # Dt is training obj ids, Wt is training view ids. Vt is V in K=V*V^t+alpha*I (eqn 20 in paper), i.e. low rank aproximation for kernel
+        Zm = torch.zeros(N, vae_cfg["zdim"])
+        Zs = torch.zeros(N, vae_cfg["zdim"])
+        Z = torch.zeros(N, vae_cfg["zdim"])
+        Eps = torch.normal(mean=torch.zeros(N, vae_cfg["zdim"]), std=torch.ones(N, vae_cfg["zdim"]))
 
-        Vv = vm(Dv, Wv).detach() # Dv is validation obj ids, Wv is validation view ids.
-        print('run vm done')
-        rv_eval, imgs, covs = eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv)
-        print('eval step done')
+        recon_term = torch.zeros(opt.bs, 1)
+        mse = torch.zeros(opt.bs, 1)
 
-        # 4. compute first-order Taylor expansion coefficient
-        # evaluate a, B, c across all samples (which we used for Vt)?
-        Zb, Vbs, vbs, gp_nll = gp.taylor_coeff(Z, [Vt])
-        rv_eval["gp_nll"] = float(gp_nll.data.mean().cpu()) / vae.K
-        print('taylor coeff done')
-
-        # 5. accumulate gradients over mini-batches and update params
-        # use taylor series approx for the gp loss
-        rv_back = backprop_and_update(
-            vae,
-            gp,
-            vm,
-            train_queue,
-            Dt,
-            Wt,
-            Eps,
-            Zb,
-            Vbs,
-            vbs,
-            vae_optimizer,
-            gp_optimizer,
-        )
-        print('backprop and update done')
-        rv_back["loss"] = (
-            rv_back["recon_term"] + rv_eval["gp_nll"] + rv_back["pen_term"]
-        )
-
-        smartAppendDict(history, rv_eval)
-        smartAppendDict(history, rv_back)
-        smartAppend(history, "vs", gp.get_vs().data.cpu().numpy())
-
-        logging.info(
-            "epoch %d - tra_mse_val: %f - train_mse_out: %f"
-            % (epoch, rv_eval["mse_val"], rv_eval["mse_out"])
-        )
-
-        # callback?
-        if epoch % opt.epoch_cb == 0:
-            logging.info("epoch %d - executing callback" % epoch)
-            ffile = os.path.join(opt.outdir, "plot.%.5d.png" % epoch)
-            callback_gppvae(epoch, history, covs, imgs, ffile)
-
-
-def encode_Y(vae, train_queue):
-    # finds encoding of every single datapoint
-    # does forward encoding passes in minibatches
-
-    vae.eval()
-
-    with torch.no_grad():
-
-        n = train_queue.dataset.Y.shape[0]
-        Zm = Variable(torch.zeros(n, vae_cfg["zdim"]), requires_grad=False)#.cuda()
-        Zs = Variable(torch.zeros(n, vae_cfg["zdim"]), requires_grad=False)#.cuda()
-
+        # for each minibatch
         for batch_i, data in enumerate(train_queue):
-            # data = [ imgs, objs, views, indices of corresponding data ]
-            y = data[0]#.cuda()
-            idxs = data[-1]#.cuda()
-            zm, zs = vae.encode(y)
-            Zm[idxs], Zs[idxs] = zm.detach(), zs.detach()
+            print("minibatch")
+            idxs = data[-1]
+            y = data[0] # size(bs, 3, 128, 128)
+            eps = Eps[idxs]
 
-    return Zm, Zs
+            # forward encoder on minibatch
+            zm, zs = vae.encode(y) # size(bs, zdim)
 
+            # sample z's
+            z = zm + zs * eps # need to replace this with matmul?? size(bs, zdim)
 
-def eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv):
+            # store z's of this minibatch
+            Zm[idxs] = zm
+            Zs[idxs] = zs
+            Z[idxs]  = z
 
-    rv = {}
+            # forward decoder on minibatch
+            yr = vae.decode(z) # size(bs, 3, 128, 128)
 
-    with torch.no_grad():
+            # compute and update mse and nll
+            recon_term_batch, mse_batch = vae.nll(y, yr) # size(bs, 1)
+            recon_term += recon_term_batch
+            mse += mse_batch
 
-        _X = vm.x().data.cpu().numpy()
-        _W = vm.v().data.cpu().numpy()
-        covs = {"XX": sp.dot(_X, _X.T), "WW": sp.dot(_W, _W.T)}
-        rv["vars"] = gp.get_vs().data.cpu().numpy()
-        # out of sample
-        vs = gp.get_vs()
-        U, UBi, _ = gp.U_UBi_Shb([Vt], vs)
-        Kiz = gp.solve(Zm, U, UBi, vs)
-        Zo = vs[0] * Vv.mm(Vt.transpose(0, 1).mm(Kiz))
-        mse_out = Variable(torch.zeros(Vv.shape[0], 1), requires_grad=False)#.cuda()
-        mse_val = Variable(torch.zeros(Vv.shape[0], 1), requires_grad=False)#.cuda()
-        for batch_i, data in enumerate(val_queue):
-            idxs = data[-1]#.cuda()
-            Yv = data[0]#.cuda()
-            Zv = vae.encode(Yv)[0].detach() # gets the mean (ignored z_sigma output)
-            Yr = vae.decode(Zv)
-            Yo = vae.decode(Zo[idxs])
-            mse_out[idxs] = (
-                ((Yv - Yo) ** 2).view(Yv.shape[0], -1).mean(1)[:, None].detach()
-            )
-            mse_val[idxs] = (
-                ((Yv - Yr) ** 2).view(Yv.shape[0], -1).mean(1)[:, None].detach()
-            )
-            # store a few examples
-            if batch_i == 0:
-                imgs = {}
-                imgs["Yv"] = Yv[:24].data.cpu().numpy().transpose(0, 2, 3, 1)
-                imgs["Yr"] = Yr[:24].data.cpu().numpy().transpose(0, 2, 3, 1)
-                imgs["Yo"] = Yo[:24].data.cpu().numpy().transpose(0, 2, 3, 1)
-        rv["mse_out"] = float(mse_out.data.mean().cpu())
-        rv["mse_val"] = float(mse_val.data.mean().cpu())
+        # forward gp (using FITC)
+        gp.y = Z
+        gp_nll = -gp() / vae.K # do we still need to divide by vae.K???
 
-    return rv, imgs, covs
+        # penalization (compute the regularization term)
+        pen_term = -0.5 * Zs.sum() / vae.K
 
-
-def backprop_and_update(
-    vae, gp, vm, train_queue, Dt, Wt, Eps, Zb, Vbs, vbs, vae_optimizer, gp_optimizer
-):
-
-    rv = {}
-
-    vae_optimizer.zero_grad()
-    gp_optimizer.zero_grad()
-    vae.train()
-    gp.train()
-    vm.train()
-
-    # for each minibatch
-    for batch_i, data in enumerate(train_queue):
-
-        # subset data: (data[-1] gives indices of datapoints in this minibatch)
-        y = data[0]#.cuda()
-        eps = Eps[data[-1]]
-        _d = Dt[data[-1]]
-        _w = Wt[data[-1]]
-        _Zb = Zb[data[-1]]
-        _Vbs = [Vbs[0][data[-1]]]
-
-        # forward vae
-        # computes reconstruction loss (distance between true image and output of decoder)
-        zm, zs = vae.encode(y)
-        z = zm + zs * eps
-        yr = vae.decode(z)
-        recon_term, mse = vae.nll(y, yr)
-
-        # forward gp
-        # use approx V and compute Taylor expansion to find approx for gp_nll
-        _Vs = [vm(_d, _w)]
-        gp_nll_fo = gp.taylor_expansion(z, _Vs, _Zb, _Vbs, vbs) / vae.K
-
-        # penalization
-        # compute the regularization term
-        pen_term = -0.5 * zs.sum(1)[:, None] / vae.K
-
-        # loss and backward
-        loss = (recon_term + gp_nll_fo + pen_term).sum()
+        # loss and backprop
+        loss = recon_term.sum() + gp_nll + pen_term.sum()
         loss.backward()
+        print("epoch {}: loss={}, mse={}".format(epoch, loss.item(), mse.item()))
 
-        # store stuff
-        _n = train_queue.dataset.Y.shape[0]
-        smartSum(rv, "mse", float(mse.data.sum().cpu()) / _n)
-        smartSum(rv, "recon_term", float(recon_term.data.sum().cpu()) / _n)
-        smartSum(rv, "pen_term", float(pen_term.data.sum().cpu()) / _n)
-
-    vae_optimizer.step()
-    gp_optimizer.step()
-
-    return rv
-
+        vae_optimizer.step()
+        gp_optimizer.step()
 
 if __name__ == "__main__":
     main()
