@@ -1,29 +1,31 @@
 # flake8: noqa
 
-import matplotlib
-import sys
-
 import torch
 from torch import nn, optim
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
-from vae import FaceVAE
+
 import scipy as sp
+import matplotlib
+
+import sys
 import os
 import pdb
 import logging
-from utils import smartSum, smartAppendDict, smartAppend, export_scripts
-from callbacks import callback_gppvae
-from data_parser import read_face_data, FaceDataset
 from optparse import OptionParser
 import pickle
 
-from kernels import RotationKernel
-from dual_input_sparse_gp import DualInputSparseGPRegression, KernelComposer
-from unobserved_feature_vectors import UnobservedFeatureVectors
+from models.vae import FaceVAE
+from models.gp import DualInputSparseGPRegression
+from models.unobserved_feature_vectors import UnobservedFeatureVectors
+from kernel.kernels import RotationKernel, KernelComposer
+
+from utils import smartSum, smartAppendDict, smartAppend, export_scripts
+from callbacks import callback_gppvae
+from data_parser import read_face_data, FaceDataset
+
 
 matplotlib.use("Qt5Agg")
-
 
 parser = OptionParser()
 parser.add_option(

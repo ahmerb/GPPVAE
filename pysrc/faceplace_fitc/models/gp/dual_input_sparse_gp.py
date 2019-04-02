@@ -6,24 +6,14 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 import matplotlib
 import matplotlib.pyplot as pl
 import numpy as np
-from sparse_gp import SparseGPRegression
-from kernels import RotationKernel
+
+from models.gp.sparse_gp import SparseGPRegression
+from kernel.kernels import KernelComposer, RotationKernel
 
 matplotlib.use('Qt5Agg')
 
 
-class KernelComposer():
-    @staticmethod
-    def Product(K1, K2):
-        return K1 * K2  # elem-wise
-
-    @staticmethod
-    def Addition(K1, K2):
-        return K1 + K2
-
-
 class DualInputSparseGPRegression(SparseGPRegression):
-    # TODO implement default Xu and Wu
     def __init__(self, X, W, y, x_kernel, w_kernel, kernel_composer, Xu, Wu, mean_function=None, noise=0.5):
         super(DualInputSparseGPRegression, self).__init__(X, y, x_kernel, Xu, mean_function=mean_function, noise=noise)
         self.x_kernel = self.kernel

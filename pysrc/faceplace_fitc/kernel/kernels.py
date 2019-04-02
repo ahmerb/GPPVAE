@@ -1,6 +1,16 @@
 import torch
 from torch import nn
-import torch.nn.functional as F
+
+
+class KernelComposer():
+    @staticmethod
+    def Product(K1, K2):
+        return K1 * K2  # elem-wise
+
+    @staticmethod
+    def Addition(K1, K2):
+        return K1 + K2
+
 
 class Kernel(nn.Module):
     def __init__(self):
@@ -29,12 +39,13 @@ class Kernel(nn.Module):
                 out[i][j] = torch.dist(X1[i], X2[j], p)
         return out
 
+
 class RotationKernel(Kernel):
     def __init__(self):
         super(RotationKernel, self).__init__()
         self.beta = nn.Parameter(torch.randn(1).clamp(min=0.0001)) # inverse noise param to rotation kernel
         self.lengthscale = nn.Parameter(torch.randn(1).clamp(min=0.001)) # lengthscale squared param to rotation kernel
-    
+
     def forward(self, X1, X2=None, diag=False):
         dist = self.dist(X1, X2)
         sineDistSqd = torch.sin(dist) * torch.sin(dist)
@@ -42,6 +53,7 @@ class RotationKernel(Kernel):
 
         # TODO dont compute the entire thing if diag=True
         return K.diag() if diag else K
+
 
 class LinearKernel(Kernel):
     def __init__(self):
