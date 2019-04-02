@@ -3,10 +3,13 @@ from torch.nn import Parameter
 import torch.distributions as dists
 from mpl_toolkits import mplot3d  # noqa: F401
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+import matplotlib
 import matplotlib.pyplot as pl
 import numpy as np
 from sparse_gp import SparseGPRegression
 from kernels import RotationKernel
+
+matplotlib.use('Qt5Agg')
 
 
 class KernelComposer():
@@ -65,7 +68,7 @@ class DualInputSparseGPRegression(SparseGPRegression):
 
     def _get_num_test_points(self, test_points):
         Xnew, _ = test_points
-        return Xnew.size(0)
+        return Xnew.shape[0]
 
     def _check_test_points_shape(self, test_points):
         Xnew, Wnew = test_points
@@ -85,8 +88,8 @@ class DualInputSparseGPRegression(SparseGPRegression):
 
     def _zero_mean_function(self, x, w):
         N = x.shape[0]  # num inputs, also equals w.shape[0]
-        L = self.y.shape[1]  # output dimension
-        return x.new_zeros(N, L)
+        L = self.y.shape[1:]  # output dimension
+        return x.new_zeros(N, *tuple(L))
 
     def posterior_predictive(self, Xnew, Wnew, full_cov=False, noiseless=True):
         test_points = (Xnew, Wnew)
@@ -207,7 +210,8 @@ def testStuff2():
     Wtest = dists.Uniform(-20.0,  7.0).sample(sample_shape=(Ntest, R))
     Ftest = torch.sin(3 * Xtest).t().mm(torch.cos(2 * Wtest)).mm(torch.ones(R, Ntest)).t().mm(torch.ones(D, L))
 
-    Fpred = sgpr.posterior_predictive(Xtest, Wtest)
+    Fpred, Fpred_cov = sgpr.posterior_predictive(Xtest, Wtest)
+    print(Fpred)
     print("MSE = ", torch.dist(Ftest, Fpred))
 
 
