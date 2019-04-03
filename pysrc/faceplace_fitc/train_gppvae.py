@@ -27,6 +27,7 @@ from data_parser import read_face_data, FaceDataset
 
 matplotlib.use("Qt5Agg")
 
+# todo upgrade from optparse to argparse
 parser = OptionParser()
 parser.add_option(
     "--data",
@@ -66,10 +67,15 @@ parser.add_option(
     "--epochs", dest="epochs", type=int, default=100, help="total number of epochs"
 )
 parser.add_option("--debug", action="store_true", dest="debug", default=False)
+parser.add_option(
+    '--enable-cuda', action='store_true', dest="enable_cuda", help='Enable CUDA', default=False
+)
 (opt, args) = parser.parse_args()
 opt_dict = vars(opt)
 
+# parse args
 
+# VAE config and weights
 if opt.vae_cfg is None:
     opt.vae_cfg = "../faceplace/out/vae/vae.cfg.p"
 vae_cfg = pickle.load(open(opt.vae_cfg, "rb"))
@@ -77,14 +83,26 @@ vae_cfg = pickle.load(open(opt.vae_cfg, "rb"))
 if opt.vae_weights is None:
     opt.vae_weights = "../faceplace/out/vae/weights/weights.00900.pt"
 
+# select device (CPU/GPU)
+device_nn = None
+device_gp = None
+if opt.enable_cuda and torch.cuda.is_available() and torch.cuda.device_count() >= 2:
+    device_nn = torch.device('cuda:0')
+    device_gp = torch.device('cuda:1')
+elif opt.enable_cuda and torch.cuda.is_available():
+    device_nn = torch.device('cuda')
+    device_gp = torch.device('cuda')
+else:
+    device_nn = torch.device('cpu')
+    device_gp = torch.device('cpu')
+
+# output dir
 if not os.path.exists(opt.outdir):
     os.makedirs(opt.outdir)
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-# output dir
 wdir = os.path.join(opt.outdir, "weights")
 fdir = os.path.join(opt.outdir, "plots")
+
 if not os.path.exists(wdir):
     os.makedirs(wdir)
 if not os.path.exists(fdir):
@@ -138,10 +156,10 @@ def main():
     Wt_features = UnobservedFeatureVectors(Wt, Q, Q)
 
     # define VAE and optimizer
-    vae = FaceVAE(**vae_cfg).to(device)
-    RV = torch.load(opt.vae_weights, map_location='cpu') # remove map_location when using gpu
+    vae = FaceVAE(**vae_cfg).to(device_nn)
+    RV = torch.load(opt.vae_weights, map_location=device_nn) # remove map_location when using gpu
     vae.load_state_dict(RV)
-    vae.to(device)
+    vae.to(device_nn)
 
     # define gp
 
@@ -152,9 +170,10 @@ def main():
         Dt_max = torch.max(Dt)
         Wt_min = torch.min(Wt)
         Wt_max = torch.min(Wt)
-    Xu = torch.linspace(Dt_min, Dt_max, M).expand(opt.xdim, M).t()
-    Wu = torch.linspace(Wt_min, Wt_max, M).expand(Q, M).t()
-    gp = DualInputSparseGPRegression(Dt, Wt, None, RotationKernel, RotationKernel, KernelComposer.Product, Xu, Wu)
+    Xu = torch.linspace(Dt_min, Dt_max, M).expand(opt.xdim, M).t().to(device_gp)
+    Wu = torch.linspace(Wt_min, Wt_max, M).expand(Q, M).t().to(device_gp)
+    gp = DualInputSparseGPRegression(Dt, Wt, None, RotationKernel, RotationKernel, KernelComposer.Product, Xu, Wu) \
+            .to(device_gp)
     # todo change obj kernel to gaussian kernel
 
     # put feature vec and gp params in one param-list
