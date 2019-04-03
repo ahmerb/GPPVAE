@@ -16,7 +16,7 @@ from optparse import OptionParser
 import pickle
 
 from models.vae import FaceVAE
-from models.gp import DualInputSparseGPRegression
+from models.gp.dual_input_sparse_gp import DualInputSparseGPRegression
 from models.unobserved_feature_vectors import UnobservedFeatureVectors
 from kernel.kernels import RotationKernel, KernelComposer
 
