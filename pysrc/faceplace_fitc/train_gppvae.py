@@ -18,7 +18,7 @@ import pickle
 from models.vae import FaceVAE
 from models.gp.dual_input_sparse_gp import DualInputSparseGPRegression
 from models.unobserved_feature_vectors import UnobservedFeatureVectors
-from kernel.kernels import RotationKernel, KernelComposer
+from kernels.kernels import RotationKernel, KernelComposer
 
 from utils import smartSum, smartAppendDict, smartAppend, export_scripts
 from callbacks import callback_gppvae

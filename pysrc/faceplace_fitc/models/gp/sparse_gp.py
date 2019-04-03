@@ -7,7 +7,7 @@ import matplotlib
 import matplotlib.pyplot as pl
 import numpy as np
 
-from kernel.kernels import RotationKernel
+from kernels.kernels import RotationKernel
 
 matplotlib.use('Qt5Agg')
 

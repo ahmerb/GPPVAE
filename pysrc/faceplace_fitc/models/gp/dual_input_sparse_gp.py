@@ -8,7 +8,7 @@ import matplotlib.pyplot as pl
 import numpy as np
 
 from models.gp.sparse_gp import SparseGPRegression
-from kernel.kernels import KernelComposer, RotationKernel
+from kernels.kernels import KernelComposer, RotationKernel
 
 matplotlib.use('Qt5Agg')
 
