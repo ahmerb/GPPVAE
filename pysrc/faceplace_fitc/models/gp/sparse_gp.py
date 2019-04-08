@@ -9,9 +9,6 @@ import numpy as np
 
 from kernels.kernels import RotationKernel
 
-matplotlib.use('Qt5Agg')
-
-
 class SparseGPRegression(nn.Module):
     def __init__(self, X, y, kernel, Xu, mean_function=None, noise=0.5):
         super(SparseGPRegression, self).__init__()
@@ -219,7 +216,10 @@ class SparseGPRegression(nn.Module):
         logprob = -0.5 * (norm_const + logdet + mahalanobis_squared)
         return logprob.sum()
 
-    def predict_and_plot(self, Xnew, nsamples=3):
+    def predict_and_plot(self, Xnew, nsamples=3, mpl_backend=None):
+        if mpl_backend is not None:
+            matplotlib.use('Qt5Agg')
+
         N = Xnew.shape[0]
         mu, cov = self.posterior_predictive(Xnew, full_cov=True)
 

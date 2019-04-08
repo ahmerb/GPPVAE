@@ -10,9 +10,6 @@ import numpy as np
 from models.gp.sparse_gp import SparseGPRegression
 from kernels.kernels import KernelComposer, RotationKernel
 
-matplotlib.use('Qt5Agg')
-
-
 class DualInputSparseGPRegression(SparseGPRegression):
     def __init__(self, X, W, y, x_kernel, w_kernel, kernel_composer, Xu, Wu, mean_function=None, noise=0.5):
         super(DualInputSparseGPRegression, self).__init__(X, y, x_kernel, Xu, mean_function=mean_function, noise=noise)
@@ -87,7 +84,10 @@ class DualInputSparseGPRegression(SparseGPRegression):
         return super(DualInputSparseGPRegression, self) \
             .posterior_predictive(test_points, full_cov=full_cov, noiseless=noiseless)
 
-    def predict_and_plot(self, Xnew, Wnew, nsamples=3):
+    def predict_and_plot(self, Xnew, Wnew, nsamples=3, mpl_backend=None):
+        if mpl_backend is not None:
+            matplotlib.use(mpl_backend)
+
         N = Xnew.shape[0]
         mu, cov = self.posterior_predictive(Xnew, Wnew, full_cov=True)
 
@@ -155,7 +155,7 @@ def testStuff():
 
     Xtest = torch.linspace(0.0, 5.0, 10)
     Wtest = torch.linspace(-5.0, 11, 10)
-    sgpr.predict_and_plot(Xtest, Wtest)
+    sgpr.predict_and_plot(Xtest, Wtest, mpl_backend='Qt5Agg')
 
 
 def testStuff2():

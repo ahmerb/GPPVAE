@@ -24,10 +24,7 @@ from utils import smartSum, smartAppendDict, smartAppend, export_scripts
 from callbacks import callback_gppvae
 from data_parser import read_face_data, FaceDataset
 
-
-matplotlib.use("Qt5Agg")
-
-# todo upgrade from optparse to argparse
+# TODO upgrade from optparse to argparse
 parser = OptionParser()
 parser.add_option(
     "--data",
@@ -96,6 +93,9 @@ else:
     device_nn = torch.device('cpu')
     device_gp = torch.device('cpu')
 
+if not opt.enable_cuda:
+    matplotlib.use("Qt5Agg")
+
 # output dir
 if not os.path.exists(opt.outdir):
     os.makedirs(opt.outdir)
@@ -152,8 +152,8 @@ def main():
     Q = sp.unique(view["train"]).shape[0]
 
     # we have sparse gp's, so we now can use arbitrarily large object feature vec size (before it was limited)
-    Dt_features = UnobservedFeatureVectors(Dt, P, opt.xdim)
-    Wt_features = UnobservedFeatureVectors(Wt, Q, Q)
+    x_features = UnobservedFeatureVectors(Dt, P, opt.xdim)
+    w_features = UnobservedFeatureVectors(Wt, Q, Q)
 
     # define VAE and optimizer
     vae = FaceVAE(**vae_cfg).to(device_nn)
@@ -172,14 +172,14 @@ def main():
         Wt_max = torch.min(Wt)
     Xu = torch.linspace(Dt_min, Dt_max, M).expand(opt.xdim, M).t().to(device_gp)
     Wu = torch.linspace(Wt_min, Wt_max, M).expand(Q, M).t().to(device_gp)
-    gp = DualInputSparseGPRegression(Dt, Wt, None, RotationKernel, RotationKernel, KernelComposer.Product, Xu, Wu) \
+    gp = DualInputSparseGPRegression(x_features(Dt), w_features(Wt), None, RotationKernel, RotationKernel, KernelComposer.Product, Xu, Wu) \
             .to(device_gp)
-    # todo change obj kernel to gaussian kernel
+    # TODO change obj kernel to gaussian kernel
 
     # put feature vec and gp params in one param-list
     gp_params = nn.ParameterList()
-    gp_params.extend(Dt_features.parameters())
-    gp_params.extend(Wt_features.parameters())
+    gp_params.extend(x_features.parameters())
+    gp_params.extend(w_features.parameters())
     gp_params.extend(gp.parameters())
 
     # define optimizers
@@ -194,6 +194,8 @@ def main():
         gp_optimizer.zero_grad()
         vae.train()
         gp.train()
+        x_features.train()
+        w_features.train()
 
         N = train_queue.dataset.Y.shape[0]
 
@@ -208,6 +210,8 @@ def main():
         # for each minibatch
         for batch_i, data in enumerate(train_queue):
             print("minibatch")
+
+            # get data from minibatch
             idxs = data[-1]
             y = data[0] # size(bs, 3, 128, 128)
             eps = Eps[idxs]
@@ -231,9 +235,10 @@ def main():
             recon_term += recon_term_batch
             mse += mse_batch
 
+
         # forward gp (using FITC)
         gp.y = Z
-        gp_nll = -gp() / vae.K # do we still need to divide by vae.K???
+        gp_nll = -gp() / vae.K # TODO do we still need to divide by vae.K???
 
         # penalization (compute the regularization term)
         pen_term = -0.5 * Zs.sum() / vae.K
@@ -241,10 +246,51 @@ def main():
         # loss and backprop
         loss = recon_term.sum() + gp_nll + pen_term.sum()
         loss.backward()
-        print("epoch {}: loss={}, mse={}".format(epoch, loss.item(), mse.item()))
+        print("TRAIN: epoch {}: loss={}, mse={}".format(epoch, loss.item(), mse.item()))
 
         vae_optimizer.step()
         gp_optimizer.step()
+
+        # eval on validation set (using GPPVAE posterior predictive)
+        rv_eval = evaluate_gppvae(vae, gp, Zm, x_features, w_features, val_queue, epoch)
+        # NOTE should eval be on test or valid set???????
+
+
+def evaluate_gppvae(vae, gp, Zm, x_features, w_features, val_queue, epoch):
+    rv = {}
+
+    vae.eval()
+    gp.eval()
+    x_features.eval()
+    w_features.eval()
+
+    with torch.no_grad():
+        gp.y = Zm
+
+        nll = torch.zeros(opt.bs, 1)
+        mse = torch.zeros(opt.bs, 1)
+
+        for batch_i, data in enumerate(val_queue):
+            print("eval minibatch")
+            y_test, x_test, w_test, idxs = data
+
+            # retrieve feature vectors
+            x_test_features = x_features(x_test[:, 0].long())
+            w_test_features = w_features(w_test[:, 0].long())
+
+            # gp posterior
+            z_test_mu, z_test_cov = gp.posterior_predictive(x_test_features, w_test_features)
+
+            # decode to get reconstructions
+            y_test_recon = vae.decode(z_test_mu)
+
+            # compute error
+            nll_batch, mse_batch = vae.nll(y_test, y_test_recon)
+            nll += nll_batch
+            mse += mse_batch
+
+        print("VALID: epoch {}: nll={}, mse={}".format(epoch, nll.item(), mse.item()))
+
 
 if __name__ == "__main__":
     main()
