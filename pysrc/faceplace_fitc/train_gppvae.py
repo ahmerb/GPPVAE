@@ -81,17 +81,20 @@ if opt.vae_weights is None:
     opt.vae_weights = "../faceplace/out/vae/weights/weights.00900.pt"
 
 # select device (CPU/GPU)
-device_nn = None
-device_gp = None
-if opt.enable_cuda and torch.cuda.is_available() and torch.cuda.device_count() >= 2:
-    device_nn = torch.device('cuda:0')
-    device_gp = torch.device('cuda:1')
-elif opt.enable_cuda and torch.cuda.is_available():
-    device_nn = torch.device('cuda')
-    device_gp = torch.device('cuda')
-else:
-    device_nn = torch.device('cpu')
-    device_gp = torch.device('cpu')
+# device_nn = None
+# device_gp = None
+# if opt.enable_cuda and torch.cuda.is_available() and torch.cuda.device_count() >= 2:
+#     device_nn = torch.device('cuda:0')
+#     device_gp = torch.device('cuda:1')
+# elif opt.enable_cuda and torch.cuda.is_available():
+#     device_nn = torch.device('cuda')
+#     device_gp = torch.device('cuda')
+# else:
+#     device_nn = torch.device('cpu')
+#     device_gp = torch.device('cpu')
+device = torch.device('cpu')
+if opt.enable_cuda and torch.cuda.is_available():
+    device = torch.device('cuda:0')
 
 if not opt.enable_cuda:
     matplotlib.use("Qt5Agg")
@@ -156,10 +159,10 @@ def main():
     w_features = UnobservedFeatureVectors(Wt, Q, Q)
 
     # define VAE and optimizer
-    vae = FaceVAE(**vae_cfg).to(device_nn)
-    RV = torch.load(opt.vae_weights, map_location=device_nn) # remove map_location when using gpu
+    vae = FaceVAE(**vae_cfg)
+    RV = torch.load(opt.vae_weights, map_location=device) # remove map_location when using gpu
     vae.load_state_dict(RV)
-    vae.to(device_nn)
+    vae.to(device)
 
     # define gp
 
@@ -170,10 +173,10 @@ def main():
         Dt_max = torch.max(Dt)
         Wt_min = torch.min(Wt)
         Wt_max = torch.min(Wt)
-    Xu = torch.linspace(Dt_min, Dt_max, M).expand(opt.xdim, M).t().to(device_gp)
-    Wu = torch.linspace(Wt_min, Wt_max, M).expand(Q, M).t().to(device_gp)
+    Xu = torch.linspace(Dt_min, Dt_max, M).expand(opt.xdim, M).t().to(device)
+    Wu = torch.linspace(Wt_min, Wt_max, M).expand(Q, M).t().to(device)
     gp = DualInputSparseGPRegression(x_features(Dt), w_features(Wt), None, RotationKernel, RotationKernel, KernelComposer.Product, Xu, Wu) \
-            .to(device_gp)
+            .to(device)
     # TODO change obj kernel to gaussian kernel
 
     # put feature vec and gp params in one param-list
@@ -199,22 +202,25 @@ def main():
 
         N = train_queue.dataset.Y.shape[0]
 
-        Zm = torch.zeros(N, vae_cfg["zdim"])
-        Zs = torch.zeros(N, vae_cfg["zdim"])
-        Z = torch.zeros(N, vae_cfg["zdim"])
-        Eps = torch.normal(mean=torch.zeros(N, vae_cfg["zdim"]), std=torch.ones(N, vae_cfg["zdim"]))
+        Zm = torch.zeros(N, vae_cfg["zdim"], device='cpu')
+        Zs = torch.zeros(N, vae_cfg["zdim"], device='cpu')
+        Z = torch.zeros(N, vae_cfg["zdim"], device='cpu')
+        Eps = torch.normal(mean=torch.zeros(N, vae_cfg["zdim"], device='cpu'), std=torch.ones(N, vae_cfg["zdim"], device='cpu'))
 
-        recon_term = torch.zeros(opt.bs, 1)
-        mse = torch.zeros(opt.bs, 1)
+        recon_term = []
+        recon_term_append = recon_term.append
 
         # for each minibatch
         for batch_i, data in enumerate(train_queue):
-            print("minibatch")
+            print("encode minibatch")
 
             # get data from minibatch
             idxs = data[-1]
-            y = data[0] # size(bs, 3, 128, 128)
-            eps = Eps[idxs]
+            y = data[0].to(device) # size(bs, 3, 128, 128)
+            eps = Eps[idxs].to(device=device, copy=True)
+
+            print("y", y.device)
+            print("eps", eps.device)
 
             # forward encoder on minibatch
             zm, zs = vae.encode(y) # size(bs, zdim)
@@ -222,41 +228,53 @@ def main():
             # sample z's
             z = zm + zs * eps # need to replace this with matmul?? size(bs, zdim)
 
-            # store z's of this minibatch
-            Zm[idxs] = zm
-            Zs[idxs] = zs
-            Z[idxs]  = z
-
             # forward decoder on minibatch
             yr = vae.decode(z) # size(bs, 3, 128, 128)
 
+            # store z's of this minibatch
+            Zm[idxs] = zm.detach().to('cpu')
+            Zs[idxs] = zs.detach().to('cpu')
+            Z[idxs]  = z.detach().to('cpu')
+            print("Zm", Zm.device)
+
             # compute and update mse and nll
-            recon_term_batch, mse_batch = vae.nll(y, yr) # size(bs, 1)
-            recon_term += recon_term_batch
-            mse += mse_batch
+            recon_term_batch, _ = vae.nll(y, yr) # size(bs, 1)
+            recon_term_append(recon_term_batch.sum())
+            # XXX .item()
+            # wait, recon_term still needs to be a tensor, as we use it later to compute `loss`, and we
+            # need to backprop through it....
+
+            print("memory usage: ", torch.cuda.max_memory_allocated())
+
+        print(recon_term)
 
 
         # forward gp (using FITC)
+        Z.to(device)
         gp.y = Z
-        gp_nll = -gp() / vae.K # TODO do we still need to divide by vae.K???
+        gp_nll = -gp()
+        gp_nll = gp_nll / vae.K
+        # TODO do we still need to divide by vae.K???
 
         # penalization (compute the regularization term)
         pen_term = -0.5 * Zs.sum() / vae.K
 
         # loss and backprop
-        loss = recon_term.sum() + gp_nll + pen_term.sum()
+        loss = recon_term.sum() + gp_nll + pen_term.sum().to(device)
         loss.backward()
+
+        # XXX can't free each vae tensor used in forward pass as need forward tensors to do backwards pass
         print("TRAIN: epoch {}: loss={}, mse={}".format(epoch, loss.item(), mse.item()))
 
         vae_optimizer.step()
         gp_optimizer.step()
 
         # eval on validation set (using GPPVAE posterior predictive)
-        rv_eval = evaluate_gppvae(vae, gp, Zm, x_features, w_features, val_queue, epoch)
+        # rv_eval = evaluate_gppvae(vae, gp, Zm, x_features, w_features, val_queue, epoch, device)
         # NOTE should eval be on test or valid set???????
 
 
-def evaluate_gppvae(vae, gp, Zm, x_features, w_features, val_queue, epoch):
+def evaluate_gppvae(vae, gp, Zm, x_features, w_features, val_queue, epoch, device):
     rv = {}
 
     vae.eval()
@@ -265,10 +283,11 @@ def evaluate_gppvae(vae, gp, Zm, x_features, w_features, val_queue, epoch):
     w_features.eval()
 
     with torch.no_grad():
+        Zm.to(device)
         gp.y = Zm
 
-        nll = torch.zeros(opt.bs, 1)
-        mse = torch.zeros(opt.bs, 1)
+        nll = torch.zeros(opt.bs, 1, device=device)
+        mse = torch.zeros(opt.bs, 1, device=device)
 
         for batch_i, data in enumerate(val_queue):
             print("eval minibatch")
