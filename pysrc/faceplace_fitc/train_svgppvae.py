@@ -120,6 +120,47 @@ fh.setFormatter(logging.Formatter(log_format))
 logging.getLogger().addHandler(fh)
 logging.info("opt = %s", opt)
 
+class SVGPRegression(AbstractVariationalGP):
+    """
+    Creates x and w tensors of shape num_outputs x n x d, and passes these to GPyTorch.
+    z_dim is dimension of GP output.
+    """
+    def __init__(self, inducing_points, x_dim, w_dim, z_dim):
+        """inducing points is tensor size: M x (x_dim+w_dim)"""
+        variational_distribution = CholeskyVariationalDistribution(inducing_points.size(0), batch_size=z_dim)
+        variational_strategy = WhitenedVariationalStrategy(self, inducing_points, variational_distribution, learn_inducing_locations=True)
+        super(SVGPRegression, self).__init__(variational_strategy)
+        self.mean_module = gpytorch.means.ConstantMean(batch_size=z_dim)
+        self.obj_covar_module = gpytorch.kernels.ScaleKernel(
+            gpytorch.kernels.RBFKernel(batch_size=z_dim),
+            batch_size=z_dim
+        )
+        self.view_covar_module = gpytorch.kernels.ScaleKernel(
+            gpytorch.kernels.PeriodicKernel(batch_size=z_dim),
+            batch_size=z_dim
+        )
+        self.x_dim = x_dim
+        self.w_dim = w_dim
+        self.z_dim = z_dim
+
+    def forward(self, inp):
+        """inp is tensor size: n x (x_dim+w_dim)"""
+        x = inp[:, :self.x_dim] # n x x_dim
+        x = x.expand(self.z_dim, *x.shape) # z_dim x n x x_dim
+        w = inp[:, self.x_dim:] # n x w_dim
+        w = w.expand(self.z_dim, *w.shape) # z_dim x n x w_dim
+        mean = self.mean_module(inp)
+        # print("z_dim x bs x x/w_dim")
+        # print("x.shape=", x.shape)
+        # print("w.shape=", w.shape)
+        # print("bs=n=", x.shape[0])
+        # print("x_dim=", x_dim)
+        # print("w_dim=", w_dim)
+        # print("z_dim=", z_dim)
+        covar = self.obj_covar_module(x) * self.view_covar_module(w) # z_dim x n x n
+        dist = gpytorch.distributions.MultivariateNormal(mean, covar)
+        return dist
+
 
 def main():
     torch.manual_seed(opt.seed)
@@ -162,7 +203,7 @@ def main():
     # define gp
 
     # init inducing inputs
-    M = 99 # num inducing points
+    M = 100 # num inducing points
     with torch.no_grad():
         Dt_min = torch.min(Dt)
         Dt_max = torch.max(Dt)
@@ -170,84 +211,6 @@ def main():
         Wt_max = torch.min(Wt)
     Xu = torch.linspace(Dt_min, Dt_max, M).expand(x_dim, M).t().to(device) # M x x_dim
     Wu = torch.linspace(Wt_min, Wt_max, M).expand(w_dim, M).t().to(device) # M x w_dim
-
-    # >>> class ExactGPModel(gpytorch.models.ExactGP):
-    # >>>     def __init__(self, train_x, train_y, likelihood, num_outputs):
-    # >>>         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
-    # >>>         self.mean_module = gpytorch.means.ConstantMean(batch_size=num_outputs)
-    # >>>         self.covar_module = gpytorch.kernels.ScaleKernel(
-    # >>>             gpytorch.kernels.RBFKernel(batch_size=num_outputs),
-    # >>>             batch_size=num_outputs
-    # >>>         )
-    # >>>         self.num_outputs = num_outputs
-    # >>>
-    # >>>     def forward(self, x):
-    # >>>         x = x.expand(self.num_outputs, x.shape)
-    # >>>
-    # >>>         mean_x = self.mean_module(x)
-    # >>>         covar_x = self.covar_module(x)
-    # >>>         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
-
-
-    class SVGPRegression(AbstractVariationalGP):
-        """
-        Expects
-            train_x - a n x 1 or n x d tensor (note that it should not be a 1D tensor!)
-            train_y - a num_outputs x n tensor
-        Creates x and w tensors of shape num_outputs x n x d, and passes these to GPyTorch.
-        z_dim is dimension of GP output.
-        """
-        def __init__(self, inducing_points, x_dim, w_dim, z_dim):
-            variational_distribution = CholeskyVariationalDistribution(inducing_points.size(0))
-            variational_strategy = WhitenedVariationalStrategy(self, inducing_points, variational_distribution, learn_inducing_locations=True)
-            super(SVGPRegression, self).__init__(variational_strategy)
-            self.obj_mean_module = gpytorch.means.ConstantMean(batch_size=z_dim)
-            self.view_mean_module = gpytorch.means.ConstantMean(batch_size=z_dim)
-            self.obj_covar_module = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.RBFKernel(batch_size=z_dim),
-                batch_size=z_dim
-            )
-            self.view_covar_module = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.PeriodicKernel(batch_size=z_dim),
-                batch_size=z_dim
-            )
-            self.x_dim = x_dim
-            self.w_dim = w_dim
-            self.z_dim = z_dim
-            print("x_dim=", x_dim)
-            print("w_dim=", w_dim)
-            print("z_dim=", z_dim)
-
-        def forward(self, inp):
-            print("inp.shape=", inp.shape) # bs x (x_dim+w_dim)
-            x = inp[:, :self.x_dim] # n x x_dim
-            x = x.expand(self.z_dim, *x.shape) # z_dim x n x x_dim
-            w = inp[:, self.x_dim:] # n x w_dim
-            w = w.expand(self.z_dim, *w.shape) # z_dim x n x w_dim
-            mean = x.new_zeros(self.z_dim, x.shape[0]) # z_dim x n
-            print("z_dim x bs x x/w_dim")
-            print("x.shape=", x.shape)
-            print("w.shape=", w.shape)
-            print("bs=n=", x.shape[0])
-            print("x_dim=", x_dim)
-            print("w_dim=", w_dim)
-            print("z_dim=", z_dim)
-            covar = self.obj_covar_module(x) * self.view_covar_module(w) # z_dim x n x n
-            return gpytorch.distributions.MultivariateNormal(mean, covar)
-
-
-    # class GPPVAEModel(gpytorch.Module):
-    #     def __init__(self, inducing_points, obj_features, view_features, vae, gp):
-    #         super(GPPVAEModel, self).__init__()
-    #         self.obj_features = obj_features
-    #         self.view_features = view_features
-    #         self.vae = vae
-    #         self.gp = gp
-
-    #     def forward(self, x, w):
-    #         x_features = self.obj_features(x)
-    #         w_features = self.view_features(w)
-
 
     inducing_points = torch.cat((Xu, Wu), 1) # M x (x_dim+w_dim)
 
@@ -289,19 +252,15 @@ def main():
             x_ = x_features(x[:, 0].long()) # bs x x_dim
             w_ = w_features(w[:, 0].long()) # bs x w_dim
             gp_inp = torch.cat((x_, w_), 1) # bs x (x_dim+w_dim)
-            print("x_.shape=", x_.shape)
-            print("w_.shape=", w_.shape)
-            print("gp_inp.shape=", gp_inp.shape)
             gp_likelihood_dist = gp_model(gp_inp)
-            gp_mll = -gp_mll(gp_likelihood_dist, z) / vae.K # z is bs x z_dim
-            print(gp_mll.shape)
+            gp_mll_term = -gp_mll(gp_likelihood_dist, z.t()) #/ vae.K # z is bs x z_dim
 
             # penalization
             pen_term = -0.5 * zs.sum() / vae.K
 
             # optim step
-            loss = recon_term.sum() + gp_mll.sum() + pen_term.sum().to(device)
-            print('Epoch %d [%d/%d] - Loss: %.3f [%.3f, %.3f, %.3f]' % (epoch + 1, batch_i, len(train_loader), loss.item(), recon_term.sum().item(), gp_mll.sum().item(), pen_term.item()))
+            loss = recon_term.sum() + gp_mll_term.sum() + pen_term.sum().to(device)
+            print('Epoch %d [%d/%d] - Loss: %.3f [%.3f, %.3f, %.3f]' % (epoch + 1, batch_i, len(train_queue), loss.item(), recon_term.sum().item(), gp_mll_term.sum().item(), pen_term.item()))
             loss.backward()
             vae_optim.step()
             gp_optim.step()
