@@ -15,6 +15,9 @@ import logging
 from optparse import OptionParser
 import pickle
 
+from utils import smartSum, smartAppendDict, smartAppend, export_scripts
+from callbacks import callback_gppvae
+
 from models.vae import FaceVAE
 from models.gp.dual_input_sparse_gp import DualInputSparseGPRegression
 from models.unobserved_feature_vectors import UnobservedFeatureVectors
@@ -142,6 +145,9 @@ class SVGPRegression(AbstractVariationalGP):
         self.x_dim = x_dim
         self.w_dim = w_dim
         self.z_dim = z_dim
+        # keep external link to obj and view covar's
+        self.Kxx = None
+        self.Kww = None
 
     def forward(self, inp):
         """inp is tensor size: n x (x_dim+w_dim)"""
@@ -157,7 +163,9 @@ class SVGPRegression(AbstractVariationalGP):
         # print("x_dim=", x_dim)
         # print("w_dim=", w_dim)
         # print("z_dim=", z_dim)
-        covar = self.obj_covar_module(x) * self.view_covar_module(w) # z_dim x n x n
+        self.Kxx = self.obj_covar_module(x)
+        self.Kww = self.view_covar_module(w)
+        covar = self.Kxx * self.Kww # z_dim x n x n
         dist = gpytorch.distributions.MultivariateNormal(mean, covar)
         return dist
 
@@ -191,8 +199,8 @@ def main():
     # we have sparse gp's, so we now can use arbitrarily large object feature vec size (before it was limited)
     x_dim = opt.xdim
     w_dim = Q
-    x_features = UnobservedFeatureVectors(Dt, P, x_dim)
-    w_features = UnobservedFeatureVectors(Wt, Q, w_dim)
+    x_features = UnobservedFeatureVectors(Dt, P, x_dim).to(device)
+    w_features = UnobservedFeatureVectors(Wt, Q, w_dim).to(device)
 
     # define VAE and optimizer
     vae = FaceVAE(**vae_cfg)
@@ -228,10 +236,12 @@ def main():
     gp_params.extend(gp_model.parameters())
     gp_optim = optim.Adam(gp_params, lr=opt.gp_lr)
 
-    gp_mll = gpytorch.mlls.VariationalELBO(gp_likelihood, gp_model, num_data=Dt.size(0), combine_terms=True)
+    gp_mll = gpytorch.mlls.VariationalELBO(gp_likelihood, gp_model, num_data=Dt.size(0), combine_terms=True).to(device)
 
+    history = {}
     for epoch in range(opt.epochs):
         print('epoch start')
+        rv = {}
         for batch_i, data in enumerate(train_queue):
             y, x, w, idxs = data
             y = y.to(device) # bs x 3 x 128 x 128
@@ -240,20 +250,18 @@ def main():
             #idxs = idxs.to(device)
 
             # vae
-            print('vae')
             zm, zs = vae.encode(y)
-            eps = torch.normal(mean=torch.zeros(y.size(0), z_dim), std=torch.ones(y.size(0), z_dim))
+            eps = torch.normal(mean=torch.zeros(y.size(0), z_dim), std=torch.ones(y.size(0), z_dim)).to(device)
             z = zm + zs * eps
             yr = vae.decode(z)
-            recon_term, _ = vae.nll(y, yr)
+            recon_term, mse = vae.nll(y, yr)
 
             # gp
-            print('gp')
             x_ = x_features(x[:, 0].long()) # bs x x_dim
             w_ = w_features(w[:, 0].long()) # bs x w_dim
             gp_inp = torch.cat((x_, w_), 1) # bs x (x_dim+w_dim)
             gp_likelihood_dist = gp_model(gp_inp)
-            gp_mll_term = -gp_mll(gp_likelihood_dist, z.t()) #/ vae.K # z is bs x z_dim
+            gp_mll_term = -gp_mll(gp_likelihood_dist, z.t()) / vae.K # z.t() is z_dim x bs
 
             # penalization
             pen_term = -0.5 * zs.sum() / vae.K
@@ -264,6 +272,43 @@ def main():
             loss.backward()
             vae_optim.step()
             gp_optim.step()
+
+            # logging etc
+            _n = train_queue.dataset.Y.shape[0]
+            smartAppend(rv, "mse", float(mse.data.sum().cpu()) / _n)
+            smartAppend(rv, "recon_term", float(recon_term.data.sum().cpu()) / _n)
+            smartAppend(rv, "pen_term", float(pen_term.data.sum().cpu() / _n))
+            smartAppend(rv, "gp_nll", float(gp_mll_term.data.sum().cpu()))
+            smartAppend(rv, "loss", loss.data.cpu().item())
+
+        smartAppendDict(history, rv)
+        print("Epoch %d - complete" % epoch)
+        if epoch % opt.epoch_cb == 0:
+            print("Epoch %d - executing callback" % epoch)
+            ffile = os.path.join(opt.outdir, "plot.%.5d.png" % epoch)
+            # TODO should use eval covs and imgs
+            # first dimension is batch_size=z_dim. Matrices are (M+bs)x(M+bs),
+            # index using M:.
+            # TODO should we be using covariance matrices just evaluated on the
+            # unique views and objects !!!!?????
+            Kxx = gp_model.Kxx.evaluate().detach().data.cpu().numpy()[0, M:, M:]
+            Kww = gp_model.Kww.evaluate().detach().data.cpu().numpy()[0, M:, M:]
+            # why is this 164x164, not 9x9??
+            covs = { "Kxx": Kxx, "Kww": Kww }
+            # TODO
+            # Yv is original images (valid set)
+            # Yr is reconstructed, using mean zm's
+            # Yo is reconstructed, using samples from zm+zs*eps
+            # Currently just using original trainset Y for all three
+            imgs = {}
+            Y = train_queue.dataset.Y
+            imgs["Yv"] = Y[:24].data.cpu().numpy().transpose(0, 2, 3, 1) # why these transposes??
+            imgs["Yr"] = Y[:24].data.cpu().numpy().transpose(0, 2, 3, 1)
+            imgs["Yo"] = Y[:24].data.cpu().numpy().transpose(0, 2, 3, 1)
+            callback_gppvae(epoch, history, covs, imgs, ffile)
+    print(history)
+
+
 
 
 def evaluate_gppvae(vae, gp, Zm, x_features, w_features, val_queue, epoch, device):
