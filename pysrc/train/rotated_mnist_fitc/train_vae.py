@@ -9,14 +9,15 @@ import torch
 from torch import optim
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
-from models.vae import RotatedMnistVAE
+import torchvision
+from models.rotated_mnist_vae import RotatedMnistVAE
 import pdb
 import logging
 from train.rotated_mnist_fitc.utils import smartSum, smartAppendDict, export_scripts
 from train.rotated_mnist_fitc.callbacks import callback
 from optparse import OptionParser
 import pickle
-from train.rotated_mnist_fitc.rotated_mnist import RotatedMnistDataset, ToTensor, getMnistPilThrees
+from train.rotated_mnist_fitc.rotated_mnist import RotatedMnistDataset, ToTensor, Resize, getMnistPilThrees
 
 
 parser = OptionParser()
@@ -44,11 +45,11 @@ parser.add_option(
     "--epoch_cb",
     dest="epoch_cb",
     type=int,
-    default=100,
+    default=50,
     help="number of epoch by which a callback (plot + dump weights) is executed",
 )
 parser.add_option(
-    "--epochs", dest="epochs", type=int, default=10000, help="total number of epochs"
+    "--epochs", dest="epochs", type=int, default=1000, help="total number of epochs"
 )
 parser.add_option("--debug", action="store_true", dest="debug", default=False)
 (opt, args) = parser.parse_args()
@@ -85,7 +86,7 @@ logging.getLogger().addHandler(fh)
 logging.info("opt = %s", opt)
 
 # extract VAE settings and export
-vae_cfg = {"nf": opt.filts, "zdim": opt.zdim, "vy": opt.vy}
+vae_cfg = {"img_size": 32, "nf": opt.filts, "zdim": opt.zdim, "steps": 3, "colors": 1, "vy": opt.vy}
 pickle.dump(vae_cfg, open(os.path.join(opt.outdir, "vae.cfg.p"), "wb"))
 
 
@@ -96,15 +97,24 @@ def main():
     if opt.debug:
         pdb.set_trace()
 
+    # make images 32x32 so they are a power of 2 so that vae conv sizes work
+    # then convert PIL image to tensor
+    transform = torchvision.transforms.Compose([
+        Resize((32, 32)),
+        ToTensor()
+    ])
+
     train_pil_ims = getMnistPilThrees(root_dir=opt.data, start_ix=0, end_ix=400)
     # test_pil_ims = getMnistPilThrees(root_dir=opt.data, start_ix=400, end_ix=500)
     valid_pil_ims = getMnistPilThrees(root_dir=opt.data, start_ix=500, end_ix=600)
-    train_data = RotatedMnistDataset(train_pil_ims, transform=ToTensor())
-    # test_data = RotatedMnistDataset(test_pil_ims, transform=ToTensor())
-    valid_data = RotatedMnistDataset(valid_pil_ims, transform=ToTensor())
+    train_data = RotatedMnistDataset(train_pil_ims, transform=transform)
+    # test_data = RotatedMnistDataset(test_pil_ims, transform=transform)
+    valid_data = RotatedMnistDataset(valid_pil_ims, transform=transform)
     train_queue = DataLoader(train_data, batch_size=opt.bs, shuffle=True)
     # test_queue = DataLoader(test_data, batch_size=opt.bs, shuffle=False)
     valid_queue = DataLoader(valid_data, batch_size=opt.bs, shuffle=False)
+    Ntrain = len(train_data)
+    Nvalid = len(valid_data)
 
     # define VAE and optimizer
     vae = RotatedMnistVAE(**vae_cfg).to(device)
@@ -118,8 +128,8 @@ def main():
     for epoch in range(opt.epochs):
 
         # train and eval
-        ht = train_ep(vae, train_queue, optimizer)
-        hv = eval_ep(vae, valid_queue)
+        ht = train_ep(vae, train_queue, optimizer, Ntrain)
+        hv = eval_ep(vae, valid_queue, Nvalid)
         smartAppendDict(history, ht)
         smartAppendDict(history, hv)
         logging.info(
@@ -135,16 +145,16 @@ def main():
             callback(epoch, valid_queue, vae, history, ffile, device)
 
 
-def train_ep(vae, train_queue, optimizer):
+def train_ep(vae, train_queue, optimizer, Ntrain):
 
     rv = {}
     vae.train()
 
     for batch_i, data in enumerate(train_queue):
-        print(batch_i)
+        y = data['image']
 
         # forward
-        y = data[0].unsqueeze(dim=1) # make bsx28x28 into bsx1x28x28 for compatibility with VAE (colour channel = 1)
+        y = y.unsqueeze(dim=1) # make bsx28x28 into bsx1x28x28 for compatibility with VAE (colour channel=1)
         eps = Variable(torch.randn(y.shape[0], opt.zdim), requires_grad=False)
         y, eps = y.to(device), eps.to(device)
         elbo, mse, nll, kld = vae.forward(y, eps)
@@ -156,16 +166,15 @@ def train_ep(vae, train_queue, optimizer):
         optimizer.step()
 
         # sum metrics
-        _n = train_queue.dataset.Y.shape[0]
-        smartSum(rv, "mse", float(mse.data.sum().cpu()) / float(_n))
-        smartSum(rv, "nll", float(nll.data.sum().cpu()) / float(_n))
-        smartSum(rv, "kld", float(kld.data.sum().cpu()) / float(_n))
-        smartSum(rv, "loss", float(elbo.data.sum().cpu()) / float(_n))
+        smartSum(rv, "mse", float(mse.data.sum().cpu()) / float(Ntrain))
+        smartSum(rv, "nll", float(nll.data.sum().cpu()) / float(Ntrain))
+        smartSum(rv, "kld", float(kld.data.sum().cpu()) / float(Ntrain))
+        smartSum(rv, "loss", float(elbo.data.sum().cpu()) / float(Ntrain))
 
     return rv
 
 
-def eval_ep(vae, val_queue):
+def eval_ep(vae, val_queue, Nvalid):
     rv = {}
     vae.eval()
 
@@ -174,17 +183,16 @@ def eval_ep(vae, val_queue):
         for batch_i, data in enumerate(val_queue):
 
             # forward
-            y = data['image']
+            y = data['image'].unsqueeze(dim=1)
             eps = Variable(torch.randn(y.shape[0], opt.zdim), requires_grad=False)
             y, eps = y.to(device), eps.to(device)
             elbo, mse, nll, kld = vae.forward(y, eps)
 
             # sum metrics
-            _n = val_queue.dataset.Y.shape[0]
-            smartSum(rv, "mse_val", float(mse.data.sum().cpu()) / float(_n))
-            smartSum(rv, "nll_val", float(nll.data.sum().cpu()) / float(_n))
-            smartSum(rv, "kld_val", float(kld.data.sum().cpu()) / float(_n))
-            smartSum(rv, "loss_val", float(elbo.data.sum().cpu()) / float(_n))
+            smartSum(rv, "mse_val", float(mse.data.sum().cpu()) / float(Nvalid))
+            smartSum(rv, "nll_val", float(nll.data.sum().cpu()) / float(Nvalid))
+            smartSum(rv, "kld_val", float(kld.data.sum().cpu()) / float(Nvalid))
+            smartSum(rv, "loss_val", float(elbo.data.sum().cpu()) / float(Nvalid))
 
     return rv
 

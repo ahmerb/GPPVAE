@@ -4,9 +4,6 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import math
-from math import pi
-
 
 matplotlib.use('Qt5Agg')
 
@@ -58,8 +55,8 @@ class RotatedMnistDataset(Dataset):
 
         for pil_im in self.mnist_threes:
             rotated_pil_ims = [(pil_im.rotate(theta), theta) for theta in rotation_labels]
-            data_ims = [(np.asarray(rotated_im), theta) for rotated_im, theta in rotated_pil_ims]
-            data_extend(data_ims)
+            # data_ims = [(np.asarray(rotated_im, dtype='float32'), theta) for rotated_im, theta in rotated_pil_ims]
+            data_extend(rotated_pil_ims)
 
         return data
 
@@ -74,14 +71,24 @@ class RotatedMnistDataset(Dataset):
         return sample
 
 
+class Resize(object):
+    """Transform resizes PIL image"""
+    def __init__(self, size):
+        self.size = size # if single number, then extends smaller dimensinon. if tuple then does both.
+
+    def __call__(self, sample):
+        sample['image'] = torchvision.transforms.functional.resize(sample['image'], self.size)
+        return sample
+
+
 class ToTensor(object):
-    """Transform to convert ndarrays in sample to Tensors."""
+    """Transform to convert PIL images in sample to Tensors (dtype float32)."""
 
     def __call__(self, sample):
         image, rotation, index = sample['image'], sample['rotation'], sample['index']
         return {
-            'image': torch.from_numpy(image),
-            'rotation': torch.tensor([rotation]),
+            'image': torch.from_numpy(np.asarray(image, dtype='float32')),
+            'rotation': torch.tensor([rotation], dtype=torch.float),
             'index': index
         }
 
@@ -90,6 +97,7 @@ if __name__ == "__main__":
     # plot first 16 datapoints (first image rotated through 16 times)
     mnist_threes = getMnistPilThrees()
     dataset = RotatedMnistDataset(mnist_threes, transform=ToTensor())
+
     fig = plt.figure()
     for i in range(16):
         sample = dataset[i]
@@ -100,3 +108,8 @@ if __name__ == "__main__":
         plt.imshow(sample['image'])
     plt.tight_layout()
     plt.show()
+
+    train_queue = DataLoader(dataset, batch_size=64, shuffle=True)
+    for batch in train_queue:
+        print(batch)
+        break

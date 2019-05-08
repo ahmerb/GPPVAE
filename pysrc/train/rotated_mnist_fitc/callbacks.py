@@ -39,6 +39,7 @@ def _compose_multi(imgs):
 
 
 def callback(epoch, val_queue, vae, history, figname, device):
+    # TODO: fix this
 
     with torch.no_grad():
 
@@ -46,7 +47,7 @@ def callback(epoch, val_queue, vae, history, figname, device):
         zm = []
         zs = []
         for batch_i, data in enumerate(val_queue):
-            y = data[0].to(device)
+            y = data['image'].unsqueeze(dim=1).to(device)
             _zm, _zs = vae.encode(y)
             zm.append(_zm.data.cpu().numpy())
             zs.append(_zs.data.cpu().numpy())
@@ -83,24 +84,27 @@ def callback(epoch, val_queue, vae, history, figname, device):
         # val reconstructions
         _zm = Variable(torch.tensor(zm[:24]), requires_grad=False).to(device)
         Rv = vae.decode(_zm[:24]).data.cpu().numpy().transpose((0, 2, 3, 1))
-        Yv = val_queue.dataset.Y[:24].numpy().transpose((0, 2, 3, 1))
+        valid_ims = list(map(lambda datum: np.asarray(datum[0].resize((32, 32), resample=2)), val_queue.dataset.data[:24]))
+        Yv = np.expand_dims(valid_ims, axis=1).transpose((0, 2, 3, 1))
+
+        pl.tight_layout()
 
         # make plot
         pl.subplot(4, 2, 2)
         _img = _compose(Yv[0:6], Rv[0:6])
-        pl.imshow(_img)
+        pl.imshow(_img.squeeze())
 
         pl.subplot(4, 2, 4)
         _img = _compose(Yv[6:12], Rv[6:12])
-        pl.imshow(_img)
+        pl.imshow(_img.squeeze())
 
         pl.subplot(4, 2, 6)
         _img = _compose(Yv[12:18], Rv[12:18])
-        pl.imshow(_img)
+        pl.imshow(_img.squeeze())
 
         pl.subplot(4, 2, 8)
         _img = _compose(Yv[18:24], Rv[18:24])
-        pl.imshow(_img)
+        pl.imshow(_img.squeeze())
 
         pl.savefig(figname)
         pl.close()

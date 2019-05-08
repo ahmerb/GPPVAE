@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 
 def f_act(x, act="elu"):
@@ -18,12 +19,12 @@ class Conv2dCellDown(nn.Module):
     def __init__(self, ni, no, ks=3, act="elu"):
         super(Conv2dCellDown, self).__init__()
         self.act = act
-        self.conv1 = nn.Conv2d(ni, no, kernel_size=ks, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(no, no, kernel_size=ks, stride=2, padding=1)
+        self.conv1 = nn.Conv2d(ni, no, kernel_size=ks, stride=2, padding=1)
+        # self.conv2 = nn.Conv2d(no, no, kernel_size=ks, stride=2, padding=1)
 
     def forward(self, x):
         x = f_act(self.conv1(x), act=self.act)
-        x = f_act(self.conv2(x), act=self.act)
+        # x = f_act(self.conv2(x), act=self.act)
         return x
 
 
@@ -31,14 +32,14 @@ class Conv2dCellUp(nn.Module):
     def __init__(self, ni, no, ks=3, act1="elu", act2="elu"):
         super(Conv2dCellUp, self).__init__()
         self.act1 = act1
-        self.act2 = act2
+        # self.act2 = act2
         self.conv1 = nn.Conv2d(ni, no, kernel_size=ks, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(no, no, kernel_size=ks, stride=1, padding=1)
+        # self.conv2 = nn.Conv2d(no, no, kernel_size=ks, stride=1, padding=1)
 
     def forward(self, x):
         x = F.interpolate(x, scale_factor=2)
         x = f_act(self.conv1(x), act=self.act1)
-        x = f_act(self.conv2(x), act=self.act2)
+        # x = f_act(self.conv2(x), act=self.act2)
         return x
 
 
@@ -51,11 +52,13 @@ class RotatedMnistVAE(nn.Module):
         super(RotatedMnistVAE, self).__init__()
 
         # store useful stuff
-        self.red_img_size = img_size // (2 ** steps)
+
+        # output size on last conv layer = (nf x red_img_size x red_img_size)
+        self.red_img_size = math.ceil(img_size / (2 ** steps))
         self.nf = nf # number of filters per conv layer
-        self.size_flat = self.red_img_size ** 2 * nf
+        self.size_flat = self.red_img_size ** 2 * nf # size of fully connect layer will be size_flat -> zdim
         self.K = img_size ** 2 * colors # number of pixels in image
-        ks = 3
+        ks = 3 # kernel size will bs (ks x ks)
 
         # define variance
         self.vy = nn.Parameter(torch.Tensor([vy]), requires_grad=False)
