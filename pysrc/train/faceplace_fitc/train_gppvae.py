@@ -18,7 +18,7 @@ import pickle
 from models.vae import FaceVAE
 from models.gp.dual_input_sparse_gp import DualInputSparseGPRegression
 from models.unobserved_feature_vectors import UnobservedFeatureVectors
-from kernels.kernels import RotationKernel, KernelComposer
+from kernels.kernels import RotationKernel, SEKernel, KernelComposer
 
 from utils import smartSum, smartAppendDict, smartAppend, export_scripts
 from callbacks import callback_gppvae
@@ -175,7 +175,7 @@ def main():
         Wt_max = torch.min(Wt)
     Xu = torch.linspace(Dt_min, Dt_max, M).expand(opt.xdim, M).t().to(device)
     Wu = torch.linspace(Wt_min, Wt_max, M).expand(Q, M).t().to(device)
-    gp = DualInputSparseGPRegression(x_features(Dt), w_features(Wt), None, RotationKernel, RotationKernel, KernelComposer.Product, Xu, Wu) \
+    gp = DualInputSparseGPRegression(x_features(Dt), w_features(Wt), None, SEKernel, RotationKernel, KernelComposer.Product, Xu, Wu) \
             .to(device)
     # TODO change obj kernel to gaussian kernel
 

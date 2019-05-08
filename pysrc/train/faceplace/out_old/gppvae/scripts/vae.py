@@ -1,6 +1,13 @@
+import sys
 import torch
-import torch.nn as nn
+from torch import nn, optim
 import torch.nn.functional as F
+from torch.autograd import Variable
+import h5py
+import scipy as sp
+import os
+import pdb
+import pylab as pl
 
 
 def f_act(x, act="elu"):
@@ -36,7 +43,7 @@ class Conv2dCellUp(nn.Module):
         self.conv2 = nn.Conv2d(no, no, kernel_size=ks, stride=1, padding=1)
 
     def forward(self, x):
-        x = F.interpolate(x, scale_factor=2)
+        x = F.upsample(x, scale_factor=2)
         x = f_act(self.conv1(x), act=self.act1)
         x = f_act(self.conv2(x), act=self.act2)
         return x
@@ -117,7 +124,6 @@ class FaceVAE(nn.Module):
         )
         elbo = nll + kld
         return elbo, mse, nll, kld
-
 
 if __name__ == "__main__":
     net = FaceVAE()

@@ -40,6 +40,21 @@ class Kernel(nn.Module):
         return out
 
 
+class SEKernel(Kernel):
+    def __init__(self):
+        super(SEKernel, self).__init__()
+        self.beta = nn.Parameter(torch.randn(1).clamp(min=0.0001)) # inverse noise param to rotation kernel
+        self.lengthscale = nn.Parameter(torch.randn(1).clamp(min=0.001)) # lengthscale squared param to rotation kernel
+
+    def forward(self, X1, X2=None, diag=False):
+        dist = self.dist(X1, X2)
+        distSqd = dist * dist
+        K = self.beta * torch.exp((-2 * distSqd) / (self.lengthscale * self.lengthscale))
+
+        # TODO dont compute the entire thing if diag=True
+        return K.diag() if diag else K
+
+
 class RotationKernel(Kernel):
     def __init__(self):
         super(RotationKernel, self).__init__()
