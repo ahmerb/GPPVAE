@@ -5,8 +5,6 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
-matplotlib.use('Qt5Agg')
-
 
 def getMnistPilThrees(root_dir='../../../mnist_data', start_ix=0, end_ix=400):
     mnist_data = torchvision.datasets.MNIST(root_dir)
@@ -94,6 +92,9 @@ class ToTensor(object):
 
 
 if __name__ == "__main__":
+    if not torch.cuda.is_available():
+        matplotlib.use('Qt5Agg')
+
     # plot first 16 datapoints (first image rotated through 16 times)
     mnist_threes = getMnistPilThrees()
     dataset = RotatedMnistDataset(mnist_threes, transform=ToTensor())

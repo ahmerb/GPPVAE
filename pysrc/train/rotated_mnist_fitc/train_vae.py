@@ -1,5 +1,4 @@
 import matplotlib
-matplotlib.use("Qt5Agg") # TODO
 
 import sys
 import os
@@ -60,6 +59,8 @@ if not os.path.exists(opt.outdir):
     os.makedirs(opt.outdir)
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+if not torch.cuda.is_available():
+    matplotlib.use("Qt5Agg")
 
 # output dir
 wdir = os.path.join(opt.outdir, "weights")
