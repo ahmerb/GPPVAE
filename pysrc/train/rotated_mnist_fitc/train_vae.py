@@ -90,18 +90,25 @@ vae_cfg = {"img_size": 32, "nf": opt.filts, "zdim": opt.zdim, "steps": 3, "color
 pickle.dump(vae_cfg, open(os.path.join(opt.outdir, "vae.cfg.p"), "wb"))
 
 
+def normalize_tsfm(sample):
+    sample['image'] = sample['image'] / 255.0
+    return sample
+
+
 def main():
 
-    torch.manual_seed(opt.seed)
+    #torch.manual_seed(opt.seed)
 
     if opt.debug:
         pdb.set_trace()
 
     # make images 32x32 so they are a power of 2 so that vae conv sizes work
     # then convert PIL image to tensor
+    # then normalize values from [0,255] to [0,1]
     transform = torchvision.transforms.Compose([
         Resize((32, 32)),
-        ToTensor()
+        ToTensor(),
+        torchvision.transforms.Lambda(normalize_tsfm)
     ])
 
     train_pil_ims = getMnistPilThrees(root_dir=opt.data, start_ix=0, end_ix=400)
@@ -120,7 +127,7 @@ def main():
     vae = RotatedMnistVAE(**vae_cfg).to(device)
 
     # optimizer
-    optimizer = optim.Adam(vae.parameters(), lr=opt.lr)
+    optimizer = optim.Adam(vae.parameters(), lr=opt.lr, eps=1e-3)
 
     # load data
 
@@ -151,6 +158,7 @@ def train_ep(vae, train_queue, optimizer, Ntrain):
     vae.train()
 
     for batch_i, data in enumerate(train_queue):
+        # print("batch")
         y = data['image']
 
         # forward
@@ -163,9 +171,30 @@ def train_ep(vae, train_queue, optimizer, Ntrain):
         # back propagate
         optimizer.zero_grad()
         loss.backward()
+
+        # print("w_back1 is nan?=", torch.isnan(vae.econv[0].conv1.weight).sum()) # NaN via backprop
+        # print("max weight=", torch.max(vae.econv[0].conv1.weight)) # are the weights exploding?
+        # print("max   grad=", torch.max(vae.econv[0].conv1.weight.grad)) # are the weights exploding?
+        # print max weight and max grad for each layer from final to first
+        # if gradient explosion, should get progressively bigger until NaNs
+        # print("loss=", loss)
+        # print("decoder (max_weight, max_grad)")
+        # for layer in reversed(vae.dconv):
+        #     print(torch.max(layer.conv1.weight), torch.max(layer.conv1.weight.grad))
+        # print(torch.max(vae.dense_dec.weight), torch.max(vae.dense_dec.weight.grad))
+        # print("encoder (max_weight, max_grad)")
+        # print(torch.max(vae.dense_zm.weight), torch.max(vae.dense_zm.weight.grad))
+        # print(torch.max(vae.dense_zs.weight), torch.max(vae.dense_zs.weight.grad))
+        # for layer in reversed(vae.econv):
+        #     print(torch.max(layer.conv1.weight), torch.max(layer.conv1.weight.grad))
+
+        # print("total econv[0].conv1.weight nans =", torch.isnan(vae.econv[0].conv1.weight))
+        #torch.nn.utils.clip_grad_norm_(vae.parameters(), 100.0)
         optimizer.step()
+        # print("w_back2 is nan?=", torch.isnan(vae.econv[0].conv1.weight).sum()) # NaN via weight update
 
         # sum metrics
+        # print("mse=", mse.data.sum().cpu())
         smartSum(rv, "mse", float(mse.data.sum().cpu()) / float(Ntrain))
         smartSum(rv, "nll", float(nll.data.sum().cpu()) / float(Ntrain))
         smartSum(rv, "kld", float(kld.data.sum().cpu()) / float(Ntrain))

@@ -23,7 +23,12 @@ class Conv2dCellDown(nn.Module):
         # self.conv2 = nn.Conv2d(no, no, kernel_size=ks, stride=2, padding=1)
 
     def forward(self, x):
-        x = f_act(self.conv1(x), act=self.act)
+        # print(" x0 is nan?=", torch.isnan(x).sum())
+        # print("  w is nan?=", torch.isnan(self.conv1.weight).sum())
+        x = self.conv1(x)
+        # print(" x1 is nan?=", torch.isnan(x).sum())
+        x = f_act(x, act=self.act)
+        # print(" x2 is nan?=", torch.isnan(x).sum())
         # x = f_act(self.conv2(x), act=self.act)
         return x
 
@@ -88,8 +93,11 @@ class RotatedMnistVAE(nn.Module):
         for ic, cell in enumerate(self.econv):
             x = cell(x)
         x = x.view(-1, self.size_flat)
+        # print(" x3 is nan?=", torch.isnan(x).sum())
         zm = self.dense_zm(x)
-        zs = F.softplus(self.dense_zs(x))
+        # print(" zm is nan?=", torch.isnan(zm).sum())
+        zs = F.softplus(self.dense_zs(x)) # softplus presumably because you can't have negative covariance values
+        # print(" zs is nan?=", torch.isnan(zs).sum())
         return zm, zs
 
     def sample(self, x, eps):
@@ -102,9 +110,13 @@ class RotatedMnistVAE(nn.Module):
         x = x.view(-1, self.nf, self.red_img_size, self.red_img_size)
         for cell in self.dconv:
             x = cell(x)
+        # print(" xr is nan? =", torch.isnan(x).sum())
         return x
 
     def nll(self, x, xr):
+        # print("vy=", self.vy)
+        # print("x  is nan? =", torch.isnan(x).sum())
+        # print("((xr - x) ** 2).sum()=", ((xr - x) ** 2).sum())
         mse = ((xr - x) ** 2).view(x.shape[0], self.K).mean(1)[:, None]
         nll = mse / (2 * self.vy)
         nll += 0.5 * torch.log(self.vy)
@@ -113,6 +125,8 @@ class RotatedMnistVAE(nn.Module):
     def forward(self, x, eps):
         zm, zs = self.encode(x)
         z = zm + eps * zs
+        # print("eps is nan? =", torch.isnan(eps).sum())
+        # print("  z is nan? =", torch.isnan(z).sum())
         xr = self.decode(z)
         nll, mse = self.nll(x, xr)
         kld = (

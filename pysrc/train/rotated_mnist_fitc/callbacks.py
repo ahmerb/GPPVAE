@@ -84,7 +84,8 @@ def callback(epoch, val_queue, vae, history, figname, device):
         # val reconstructions
         _zm = Variable(torch.tensor(zm[:24]), requires_grad=False).to(device)
         Rv = vae.decode(_zm[:24]).data.cpu().numpy().transpose((0, 2, 3, 1))
-        valid_ims = list(map(lambda datum: np.asarray(datum[0].resize((32, 32), resample=2)), val_queue.dataset.data[:24]))
+        valid_ims = list(map(lambda datum: np.asarray(datum[0].resize((32, 32), resample=2)),
+                             val_queue.dataset.data[:24]))
         Yv = np.expand_dims(valid_ims, axis=1).transpose((0, 2, 3, 1))
 
         pl.tight_layout()
