@@ -9,6 +9,7 @@ import numpy as np
 
 from kernels.kernels import RotationKernel
 
+
 class SparseGPRegression(nn.Module):
     def __init__(self, X, y, kernel, Xu, mean_function=None, noise=0.5):
         super(SparseGPRegression, self).__init__()

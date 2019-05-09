@@ -1,32 +1,28 @@
-# flake8: noqa
+import matplotlib
 
 import torch
-from torch import nn, optim
-from torch.autograd import Variable
+from torch import optim
 from torch.utils.data import DataLoader
-
-import scipy as sp
-import matplotlib
+import torchvision
 
 import sys
 import os
+
+sys.path.insert(1, os.path.join(sys.path[0], '../..'))
+
 import pdb
 import logging
 from optparse import OptionParser
 import pickle
 
-from models.vae import FaceVAE
-from models.gp.dual_input_sparse_gp import SparseGPRegression
-from models.unobserved_feature_vectors import UnobservedFeatureVectors
-from kernels.kernels import RotationKernel, SEKernel, KernelComposer
+from models.rotated_mnist_vae import RotatedMnistVAE
+from models.gp.sparse_gp import SparseGPRegression
+from kernels.kernels import RotationKernel
 
-from .utils import smartSum, smartAppendDict, smartAppend, export_scripts
-from .callbacks import callback_gppvae
-from .data_parser import read_face_data, FaceDataset
+from train.rotated_mnist_fitc.utils import smartSum, smartAppendDict, export_scripts
+from train.rotated_mnist_fitc.callbacks import callback_gppvae, save_history
 
-import torchvision
-import torchvision.datasets
-from .rotated_mnist import RotatedMnistDataset, ToTensor, getMnistPilThrees
+from train.rotated_mnist_fitc.rotated_mnist import RotatedMnistDataset, ToTensor, Resize, getMnistPilThrees
 
 
 # TODO upgrade from optparse to argparse
@@ -41,8 +37,8 @@ parser.add_option(
 parser.add_option(
     "--outdir", dest="outdir", type=str, default="./out/gppvae", help="output dir"
 )
-parser.add_option("--vae_cfg", dest="vae_cfg", type=str, default=None)
-parser.add_option("--vae_weights", dest="vae_weights", type=str, default=None)
+parser.add_option("--vae_cfg", dest="vae_cfg", type=str, default="./out/vae/vae.cfg.p")
+parser.add_option("--vae_weights", dest="vae_weights", type=str, default="./out/vae/weights/weights.00950.pt")
 parser.add_option("--seed", dest="seed", type=int, default=0, help="seed")
 parser.add_option(
     "--vae_lr",
@@ -55,7 +51,7 @@ parser.add_option(
     "--gp_lr", dest="gp_lr", type=float, default=1e-3, help="learning rate of gp params"
 )
 parser.add_option(
-    "--xdim", dest="xdim", type=int, default=64, help="rank of object linear covariance"
+    "--xdim", dest="xdim", type=int, default=1, help="rank of object linear covariance"
 )
 parser.add_option("--bs", dest="bs", type=int, default=64, help="batch size")
 parser.add_option(
@@ -66,44 +62,36 @@ parser.add_option(
     help="number of epoch by which a callback (plot + dump weights) is executed",
 )
 parser.add_option(
-    "--epochs", dest="epochs", type=int, default=100, help="total number of epochs"
+    "--epochs", dest="epochs", type=int, default=500, help="total number of epochs"
 )
 parser.add_option("--debug", action="store_true", dest="debug", default=False)
-parser.add_option(
-    '--enable-cuda', action='store_true', dest="enable_cuda", help='Enable CUDA', default=False
-)
 (opt, args) = parser.parse_args()
 opt_dict = vars(opt)
 
 # parse args
-# VAE config and weights
-if opt.vae_cfg is None:
-    opt.vae_cfg = "../faceplace/out/vae/vae.cfg.p"
-vae_cfg = pickle.load(open(opt.vae_cfg, "rb"))
 
+# VAE config
+vae_cfg = pickle.load(open(opt.vae_cfg, "rb"))
 z_dim = vae_cfg["zdim"]
 
-if opt.vae_weights is None:
-    opt.vae_weights = "../faceplace/out/vae/weights/weights.00900.pt"
-
-device = torch.device('cpu')
-if opt.enable_cuda and torch.cuda.is_available():
-    device = torch.device('cuda')
-
-if not opt.enable_cuda:
+# device
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+if not torch.cuda.is_available():
     matplotlib.use("Qt5Agg")
 
 # output dir
 if not os.path.exists(opt.outdir):
     os.makedirs(opt.outdir)
-
 wdir = os.path.join(opt.outdir, "weights")
 fdir = os.path.join(opt.outdir, "plots")
-
+hdir = os.path.join(opt.outdir, "history")
 if not os.path.exists(wdir):
     os.makedirs(wdir)
 if not os.path.exists(fdir):
     os.makedirs(fdir)
+if not os.path.exists(hdir):
+    os.makedirs(hdir)
+
 
 # copy code to output folder
 export_scripts(os.path.join(opt.outdir, "scripts"))
@@ -122,28 +110,42 @@ logging.getLogger().addHandler(fh)
 logging.info("opt = %s", opt)
 
 
+def normalize_tsfm(sample):
+    sample['image'] = sample['image'] / 255.0
+    return sample
+
+
 def main():
     torch.manual_seed(opt.seed)
 
     if opt.debug:
         pdb.set_trace()
 
+    # make images 32x32 so they are a power of 2 so that vae conv sizes work
+    # then convert PIL image to tensor
+    # then normalize values from [0,255] to [0,1]
+    transform = torchvision.transforms.Compose([
+        Resize((32, 32)),
+        ToTensor(),
+        torchvision.transforms.Lambda(normalize_tsfm)
+    ])
+
     train_pil_ims = getMnistPilThrees(root_dir=opt.data, start_ix=0, end_ix=400)
-    test_pil_ims  = getMnistPilThrees(root_dir=opt.data, start_ix=400, end_ix=500)
+    # test_pil_ims  = getMnistPilThrees(root_dir=opt.data, start_ix=400, end_ix=500)
     valid_pil_ims = getMnistPilThrees(root_dir=opt.data, start_ix=500, end_ix=600)
-    train_data = RotatedMnistDataset(train_pil_ims, transform=ToTensor())
-    test_data  = RotatedMnistDataset(test_pil_ims, transform=ToTensor())
-    valid_data = RotatedMnistDataset(valid_pil_ims, transform=ToTensor())
+    train_data = RotatedMnistDataset(train_pil_ims, transform=transform)
+    # test_data  = RotatedMnistDataset(test_pil_ims, transform=transform)
+    valid_data = RotatedMnistDataset(valid_pil_ims, transform=transform)
     train_queue = DataLoader(train_data, batch_size=opt.bs, shuffle=True)
-    test_queue  = DataLoader(test_data, batch_size=opt.bs, shuffle=False)
+    # test_queue  = DataLoader(test_data, batch_size=opt.bs, shuffle=False)
     valid_queue = DataLoader(valid_data, batch_size=opt.bs, shuffle=False)
+    Ntrain = len(train_data)
+    Nvalid = len(valid_data)
 
-    N = len(train_data)
-
-    num_rotations = 16 # number of unique rotation angles
+    # num_rotations = 16 # number of unique rotation angles
 
     # define VAE
-    vae = FaceVAE(**vae_cfg)
+    vae = RotatedMnistVAE(**vae_cfg)
     vae_state = torch.load(opt.vae_weights, map_location=device)
     vae.load_state_dict(vae_state)
     vae.to(device)
@@ -152,36 +154,47 @@ def main():
 
     # init inducing points
     M = 50
-    min_rot_angle = torch.tensor([0.0])
-    max_rot_angle = torch.tensor([337.5])
-    Xu = torch.linspace(min_rot_angle, max_rot_angle, M, device=device)
+    min_rot_angle = 0.0
+    max_rot_angle = 337.5
+    Xu = torch.linspace(min_rot_angle, max_rot_angle, M).to(device)
 
     # extract auxiliary data
-    X = list(map(lambda datapoint: datapoint[1], train_data.data))
+    Xtrain = torch.tensor(
+        list(map(lambda datapoint: float(datapoint[1]), train_data.data)),
+    ).to(device)
 
     # init gp
-    gp = SparseGPRegression(X, None, RotationKernel, Xu).to(device)
+    kernel = RotationKernel # ().to(device)
+    gp = SparseGPRegression(Xtrain, None, kernel, Xu).to(device)
+    # gp_params = torch.nn.ParameterList()
+    # gp_params.extend(kernel.parameters())
+    # gp_params.extend(gp.parameters())
 
     # optimizers
     vae_optimizer = optim.Adam(vae.parameters(), lr=opt.vae_lr)
-    gp_optimizer = optim.Adam(gp.parameters(), lr=opt.gp_lr) # TODO: will this include kernel fn params??
+    gp_optimizer = optim.Adam(gp.parameters(), lr=opt.gp_lr)
 
-    # train loop
+    history = {}
     for epoch in range(opt.epochs):
         vae_optimizer.zero_grad()
         gp_optimizer.zero_grad()
         vae.train()
         gp.train()
 
-        Zm = torch.zeros(N, z_dim, device="cpu")
-        Zs = torch.zeros(N, z_dim, device="cpu")
-        Z = torch.zeros(N, z_dim, device="cpu")
-        Eps = torch.normal(mean=torch.zeros(N, z_dim, device='cpu'), std=torch.ones(N, z_dim, device='cpu'))
+        ht = {}
 
-        recon_term = []
-        recon_term_append = recon_term.append
-        mse = []
-        mse_append = mse.append
+        Zm = torch.zeros(Ntrain, z_dim, device="cpu")
+        Zs = torch.zeros(Ntrain, z_dim, device="cpu")
+        Z = torch.zeros(Ntrain, z_dim, device="cpu")
+        Eps = torch.normal(mean=torch.zeros(Ntrain, z_dim, device='cpu'), std=torch.ones(Ntrain, z_dim, device='cpu'))
+
+        # recon_term = []
+        # recon_term_append = recon_term.append
+        # mse = []
+        # mse_append = mse.append
+
+        recon_term = torch.zeros(opt.bs, 1, device=device)
+        mse = torch.zeros(opt.bs, 1, device=device)
 
         # for each minibatch
         for batch_i, data in enumerate(train_queue):
@@ -189,11 +202,11 @@ def main():
 
             # get data from minibatch
             idxs = data['index']
-            y = data['image'].to(device) # size(bs, 3, 128, 128)
+            y = data['image'].unsqueeze(dim=1).to(device) # size(bs, 1 32, 32)
             eps = Eps[idxs].to(device=device, copy=True)
 
-            print("y", y.device)
-            print("eps", eps.device)
+            # print("y", y.device)
+            # print("eps", eps.device)
 
             # forward encoder on minibatch
             zm, zs = vae.encode(y) # size(bs, zdim)
@@ -202,26 +215,21 @@ def main():
             z = zm + zs * eps # size(bs, zdim)
 
             # forward decoder on minibatch
-            yr = vae.decode(z) # size(bs, 3, 128, 128)
+            yr = vae.decode(z) # size(bs, 1, 32, 32)
 
             # store z's of this minibatch
             Zm[idxs] = zm.detach().to('cpu')
             Zs[idxs] = zs.detach().to('cpu')
-            Z[idxs]  = z.detach().to('cpu')
-            print("Zm", Zm.device)
+            Z[idxs] = z.detach().to('cpu')
+            # print("Zm", Zm.device)
 
             # compute and update mse and nll
-            recon_term_batch, mse_term_batch = vae.nll(y, yr) # size(bs, 1)
-            recon_term_append(recon_term_batch.sum())
-            mse_batch, mse = vae.nll(y, yr) # size(bs, 1)
-            mse_append(mse_batch.sum())
-            # XXX .item()
-            # wait, recon_term still needs to be a tensor, as we use it later to compute `loss`, and we
-            # need to backprop through it....
+            recon_term_batch, mse_batch = vae.nll(y, yr) # size(bs, 1)
+            recon_term += recon_term_batch
+            mse += mse_batch
 
-            print("memory usage: ", torch.cuda.max_memory_allocated())
-
-        print(recon_term)
+            if torch.cuda.is_available():
+                print("memory usage: ", torch.cuda.max_memory_allocated())
 
         # forward gp (using FITC)
         Z.to(device)
@@ -236,51 +244,62 @@ def main():
         loss = recon_term.sum() + gp_nll + pen_term.sum().to(device)
         loss.backward()
 
-        print("TRAIN: epoch {}: loss={}, mse={}".format(epoch, loss.item(), mse.item()))
-
         vae_optimizer.step()
         gp_optimizer.step()
 
         # eval on validation set (using GPPVAE posterior predictive)
-        # rv_eval = evaluate_gppvae(vae, gp, Zm, x_features, w_features, val_queue, epoch, device)
-        # NOTE should eval be on test or valid set???????
+        hv = evaluate_gppvae(vae, gp, Zm, Xtrain, valid_queue, Nvalid, epoch, device)
+
+        smartSum(ht, "mse", float(mse.data.sum().cpu()) / float(Ntrain))
+        smartSum(ht, "gp_nll", float(gp_nll.data.cpu()) / float(Ntrain))
+        smartSum(ht, "recon_term", float(recon_term.data.sum().cpu()) / float(Ntrain))
+        smartSum(ht, "pen_term", float(pen_term.data.sum().cpu()) / float(Ntrain))
+        smartSum(ht, "loss", float(loss.data.cpu()) / float(Ntrain))
+        smartAppendDict(history, ht)
+        smartAppendDict(history, hv)
+
+        logging.info(
+            "epoch %d - train_mse: %f - test_mse %f" % (epoch, ht["mse"], hv["mse_val"])
+        )
+
+        # callbacks
+        if epoch % opt.epoch_cb == 0:
+            logging.info("epoch %d - executing callback" % epoch)
+            wfile = os.path.join(wdir, "weights.%.5d.pt" % epoch)
+            ffile = os.path.join(fdir, "plot.%.5d.png" % epoch)
+            torch.save(vae.state_dict(), wfile)
+            callback_gppvae(epoch, valid_queue, vae, history, ffile, device)
+
+    save_history(history, hdir, pickle=True)
 
 
-def evaluate_gppvae(vae, gp, Zm, x_features, w_features, val_queue, epoch, device):
-    rv = {}
+def evaluate_gppvae(vae, gp, Zm, Xtrain, valid_queue, Nvalid, epoch, device):
+    hv = {}
 
     vae.eval()
     gp.eval()
-    x_features.eval()
-    w_features.eval()
 
     with torch.no_grad():
         Zm.to(device)
         gp.y = Zm
 
-        nll = torch.zeros(opt.bs, 1, device=device)
-        mse = torch.zeros(opt.bs, 1, device=device)
-
-        for batch_i, data in enumerate(val_queue):
+        for batch_i, data in enumerate(valid_queue):
             print("eval minibatch")
-            y_test, x_test, w_test, idxs = data
-
-            # retrieve feature vectors
-            x_test_features = x_features(x_test[:, 0].long())
-            w_test_features = w_features(w_test[:, 0].long())
+            y_test = data['image'].unsqueeze(dim=1)
+            y_test.to(device)
 
             # gp posterior
-            z_test_mu, z_test_cov = gp.posterior_predictive(x_test_features, w_test_features)
+            z_test_mu, _ = gp.posterior_predictive(Xtrain)
 
             # decode to get reconstructions
             y_test_recon = vae.decode(z_test_mu)
 
             # compute error
-            nll_batch, mse_batch = vae.nll(y_test, y_test_recon)
-            nll += nll_batch
-            mse += mse_batch
+            recon_term, mse = vae.nll(y_test, y_test_recon)
+            smartSum(hv, "mse_val", float(mse.data.sum().cpu()) / float(Nvalid))
+            smartSum(hv, "recon_term", float(recon_term.data.sum().cpu()) / float(Nvalid))
 
-        print("VALID: epoch {}: nll={}, mse={}".format(epoch, nll.item(), mse.item()))
+    return hv
 
 
 if __name__ == "__main__":

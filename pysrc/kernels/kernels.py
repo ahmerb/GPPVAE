@@ -32,7 +32,7 @@ class Kernel(nn.Module):
         if X1.size(1) != X2.size(1):
             raise ValueError("Inputs must have same number of features")
 
-        out = torch.zeros([X1.size(0), X2.size(0)])
+        out = torch.zeros([X1.size(0), X2.size(0)]).to(X1.device)
 
         for i in range(X1.size(0)):
             for j in range(X2.size(0)):

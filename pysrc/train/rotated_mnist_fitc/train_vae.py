@@ -54,13 +54,12 @@ parser.add_option("--debug", action="store_true", dest="debug", default=False)
 (opt, args) = parser.parse_args()
 opt_dict = vars(opt)
 
-
-if not os.path.exists(opt.outdir):
-    os.makedirs(opt.outdir)
-
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 if not torch.cuda.is_available():
     matplotlib.use("Qt5Agg")
+
+if not os.path.exists(opt.outdir):
+    os.makedirs(opt.outdir)
 
 # output dir
 wdir = os.path.join(opt.outdir, "weights")
@@ -133,8 +132,6 @@ def main():
     # optimizer
     optimizer = optim.Adam(vae.parameters(), lr=opt.lr, eps=1e-3)
 
-    # load data
-
     history = {}
     for epoch in range(opt.epochs):
 
@@ -201,7 +198,7 @@ def train_ep(vae, train_queue, optimizer, Ntrain):
 
         # sum metrics
         # print("mse=", mse.data.sum().cpu())
-        smartSum(rv, "mse", float(mse.data.sum().cpu()) / float(Ntrain))
+        smartSum(rv, "mse", float(mse.data.sum().cpu()) / float(Ntrain)) # TODO XXX should actually be over size of batch ????
         smartSum(rv, "nll", float(nll.data.sum().cpu()) / float(Ntrain))
         smartSum(rv, "kld", float(kld.data.sum().cpu()) / float(Ntrain))
         smartSum(rv, "loss", float(elbo.data.sum().cpu()) / float(Ntrain))
