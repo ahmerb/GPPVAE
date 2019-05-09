@@ -38,9 +38,22 @@ def _compose_multi(imgs):
     return _rv
 
 
-def callback(epoch, val_queue, vae, history, figname, device):
-    # TODO: fix this
+def save_history(history, hdir, pickle=False):
+    hfile = os.path.join(hdir, "history.pkl") if pickle else os.path.join(hdir, "history.json")
+    if pickle:
+        import pickle
+        f = open(hfile, "wb")
+        pickle.dump(history, f)
+        f.close()
+    else:
+        import json
+        string = json.dumps(history)
+        f = open(hfile, "w")
+        f.write(string)
+        f.close()
 
+
+def callback(epoch, val_queue, vae, history, figname, device):
     with torch.no_grad():
 
         # compute z

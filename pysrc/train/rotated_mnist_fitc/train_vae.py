@@ -14,7 +14,7 @@ from models.rotated_mnist_vae import RotatedMnistVAE
 import pdb
 import logging
 from train.rotated_mnist_fitc.utils import smartSum, smartAppendDict, export_scripts
-from train.rotated_mnist_fitc.callbacks import callback
+from train.rotated_mnist_fitc.callbacks import callback, save_history
 from optparse import OptionParser
 import pickle
 from train.rotated_mnist_fitc.rotated_mnist import RotatedMnistDataset, ToTensor, Resize, getMnistPilThrees
@@ -64,10 +64,13 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 # output dir
 wdir = os.path.join(opt.outdir, "weights")
 fdir = os.path.join(opt.outdir, "plots")
+hdir = os.path.join(opt.outdir, "history")
 if not os.path.exists(wdir):
     os.makedirs(wdir)
 if not os.path.exists(fdir):
     os.makedirs(fdir)
+if not os.path.exists(hdir):
+    os.makedirs(hdir)
 
 # copy code to output folder
 export_scripts(os.path.join(opt.outdir, "scripts"))
@@ -150,6 +153,8 @@ def main():
             ffile = os.path.join(fdir, "plot.%.5d.png" % epoch)
             torch.save(vae.state_dict(), wfile)
             callback(epoch, valid_queue, vae, history, ffile, device)
+
+    save_history(history, hdir, pickle=True)
 
 
 def train_ep(vae, train_queue, optimizer, Ntrain):
