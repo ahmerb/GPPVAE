@@ -19,7 +19,7 @@ class Kernel(nn.Module):
     def forward(self, X1, X2=None):
         raise NotImplementedError("Kernel is an abstract class")
 
-    def dist(self, X1, X2=None, p=2):
+    def dist(self, X1, X2=None, p=2, diag=False):
         # if X2 not given, then set X2=X1, so we can make calls like k(X)
         if X2 is None:
             X2 = X1
@@ -32,12 +32,21 @@ class Kernel(nn.Module):
         if X1.size(1) != X2.size(1):
             raise ValueError("Inputs must have same number of features")
 
-        out = torch.zeros([X1.size(0), X2.size(0)]).to(X1.device)
+        if diag:
+            if X1.size(0) != X2.size(0):
+                raise ValueError("Inputs must have same shape with diag=True")
+            N = X1.size(0)
+            out = torch.zeros(N).to(X1.device)
+            for i in range(N):
+                out[i] = torch.dist(X1[i], X2[i], p)
+            return out
 
-        for i in range(X1.size(0)):
-            for j in range(X2.size(0)):
-                out[i][j] = torch.dist(X1[i], X2[j], p)
-        return out
+        else:
+            out = torch.zeros([X1.size(0), X2.size(0)]).to(X1.device)
+            for i in range(X1.size(0)):
+                for j in range(X2.size(0)):
+                    out[i][j] = torch.dist(X1[i], X2[j], p)
+            return out
 
 
 class SEKernel(Kernel):
@@ -47,12 +56,10 @@ class SEKernel(Kernel):
         self.lengthscale = nn.Parameter(torch.randn(1).clamp(min=0.001)) # lengthscale squared param to rotation kernel
 
     def forward(self, X1, X2=None, diag=False):
-        dist = self.dist(X1, X2)
+        dist = self.dist(X1, X2, diag=diag)
         distSqd = dist * dist
         K = self.beta * torch.exp((-2 * distSqd) / (self.lengthscale * self.lengthscale))
-
-        # TODO dont compute the entire thing if diag=True
-        return K.diag() if diag else K
+        return K
 
 
 class RotationKernel(Kernel):
@@ -62,12 +69,10 @@ class RotationKernel(Kernel):
         self.lengthscale = nn.Parameter(torch.randn(1).clamp(min=0.001)) # lengthscale squared param to rotation kernel
 
     def forward(self, X1, X2=None, diag=False):
-        dist = self.dist(X1, X2)
+        dist = self.dist(X1, X2, diag=diag)
         sineDistSqd = torch.sin(dist) * torch.sin(dist)
         K = self.beta * torch.exp((-2 * sineDistSqd) / (self.lengthscale * self.lengthscale))
-
-        # TODO dont compute the entire thing if diag=True
-        return K.diag() if diag else K
+        return K
 
 
 class LinearKernel(Kernel):

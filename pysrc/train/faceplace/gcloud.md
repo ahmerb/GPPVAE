@@ -1,11 +1,15 @@
-run
+train vae
 
 ```bash
-nohup python train_vae.py --outdir ./out/vae --data ../../data/data_faces.h5 --epochs 5000 --lr 0.001 &> train_vae.out &
+nohup python train_vae.py --outdir ./out/vae --data ../../../data/data_faces.h5 --epochs 5000 --lr 0.001 &> train_vae.out &
+
+python train_vae.py --outdir ./out/vae --data ../../../data/data_faces.h5 --epochs 10 --epoch_cb 1 --lr 0.001
 ```
 
-or for testing stuff
+training in unison
 
 ```bash
-python train_vae.py --outdir ./out/vae --data ../../data/data_faces.h5 --epochs 10 --epoch_cb 1 --lr 0.001
+nohup python train_gppvae.py --epochs 5500 --train_unison &> train_gppvae_unison.out &
+
+python train_gppvae.py --epochs 10 --epoch_cb 1 --train_unison
 ```

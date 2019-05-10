@@ -1,15 +1,13 @@
 import sys
 
 sys.path.append("./..")
-import pdb
 import os
 import scipy as sp
-import scipy.stats as st
-import scipy.linalg as la
 import numpy as np
 import pylab as pl
 import torch
 from torch.autograd import Variable
+
 
 def _compose(orig, recon):
     _imgo = []
@@ -207,6 +205,8 @@ def callback_gppvae(epoch, history, covs, imgs, ffile):
     pl.colorbar()
 
     Yv, Yr, Rv = imgs["Yv"], imgs["Yr"], imgs["Yo"]
+
+    pl.tight_layout()
 
     # make plot
     pl.subplot(4, 2, 2)

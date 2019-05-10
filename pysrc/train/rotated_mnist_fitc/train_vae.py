@@ -54,7 +54,7 @@ parser.add_option("--debug", action="store_true", dest="debug", default=False)
 (opt, args) = parser.parse_args()
 opt_dict = vars(opt)
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 if not torch.cuda.is_available():
     matplotlib.use("Qt5Agg")
 

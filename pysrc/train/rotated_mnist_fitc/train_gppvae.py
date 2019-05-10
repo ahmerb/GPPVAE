@@ -44,7 +44,7 @@ parser.add_option(
     "--vae_lr",
     dest="vae_lr",
     type=float,
-    default=2e-4,
+    default=0.0003,
     help="learning rate of vae params",
 )
 parser.add_option(
@@ -142,7 +142,7 @@ def main():
     Ntrain = len(train_data)
     Nvalid = len(valid_data)
 
-    # num_rotations = 16 # number of unique rotation angles
+    num_rotations = 16 # number of unique rotation angles
 
     # define VAE
     vae = RotatedMnistVAE(**vae_cfg)
@@ -164,11 +164,8 @@ def main():
     ).to(device)
 
     # init gp
-    kernel = RotationKernel # ().to(device)
+    kernel = RotationKernel
     gp = SparseGPRegression(Xtrain, None, kernel, Xu).to(device)
-    # gp_params = torch.nn.ParameterList()
-    # gp_params.extend(kernel.parameters())
-    # gp_params.extend(gp.parameters())
 
     # optimizers
     vae_optimizer = optim.Adam(vae.parameters(), lr=opt.vae_lr)
@@ -188,25 +185,15 @@ def main():
         Z = torch.zeros(Ntrain, z_dim, device="cpu")
         Eps = torch.normal(mean=torch.zeros(Ntrain, z_dim, device='cpu'), std=torch.ones(Ntrain, z_dim, device='cpu'))
 
-        # recon_term = []
-        # recon_term_append = recon_term.append
-        # mse = []
-        # mse_append = mse.append
-
         recon_term = torch.zeros(opt.bs, 1, device=device)
         mse = torch.zeros(opt.bs, 1, device=device)
 
         # for each minibatch
         for batch_i, data in enumerate(train_queue):
-            print("encode minibatch")
-
             # get data from minibatch
             idxs = data['index']
             y = data['image'].unsqueeze(dim=1).to(device) # size(bs, 1 32, 32)
             eps = Eps[idxs].to(device=device, copy=True)
-
-            # print("y", y.device)
-            # print("eps", eps.device)
 
             # forward encoder on minibatch
             zm, zs = vae.encode(y) # size(bs, zdim)
@@ -221,18 +208,17 @@ def main():
             Zm[idxs] = zm.detach().to('cpu')
             Zs[idxs] = zs.detach().to('cpu')
             Z[idxs] = z.detach().to('cpu')
-            # print("Zm", Zm.device)
 
             # compute and update mse and nll
             recon_term_batch, mse_batch = vae.nll(y, yr) # size(bs, 1)
             recon_term += recon_term_batch
             mse += mse_batch
 
-            if torch.cuda.is_available():
-                print("memory usage: ", torch.cuda.max_memory_allocated())
+            # if torch.cuda.is_available():
+            #     print("memory usage: ", torch.cuda.max_memory_allocated())
 
         # forward gp (using FITC)
-        Z.to(device)
+        Z = Z.to(device)
         gp.y = Z
         gp_nll = -gp()
         gp_nll = gp_nll / z_dim
@@ -248,7 +234,7 @@ def main():
         gp_optimizer.step()
 
         # eval on validation set (using GPPVAE posterior predictive)
-        hv = evaluate_gppvae(vae, gp, Zm, Xtrain, valid_queue, Nvalid, epoch, device)
+        hv, imgs = evaluate_gppvae(vae, gp, Zm, Xtrain, valid_queue, Nvalid, epoch, device)
 
         smartSum(ht, "mse", float(mse.data.sum().cpu()) / float(Ntrain))
         smartSum(ht, "gp_nll", float(gp_nll.data.cpu()) / float(Ntrain))
@@ -268,38 +254,55 @@ def main():
             wfile = os.path.join(wdir, "weights.%.5d.pt" % epoch)
             ffile = os.path.join(fdir, "plot.%.5d.png" % epoch)
             torch.save(vae.state_dict(), wfile)
-            callback_gppvae(epoch, valid_queue, vae, history, ffile, device)
+            covs = compute_covs(min_rot_angle, max_rot_angle, num_rotations, Xu, gp.kernel, device)
+            callback_gppvae(epoch, history, covs, imgs, ffile)
 
     save_history(history, hdir, pickle=True)
 
 
+def compute_covs(min_rot_angle, max_rot_angle, num_rotations, Xu, kernel, device):
+    # covariance between all unique rotation angles
+    x_unique = torch.linspace(min_rot_angle, max_rot_angle, num_rotations).to(device)
+    K = kernel(x_unique).data.cpu().numpy()
+
+    # covariance between all Xu
+    Kuu = kernel(Xu).data.cpu().numpy()
+
+    return {"K": K, "Kuu": Kuu}
+
+
 def evaluate_gppvae(vae, gp, Zm, Xtrain, valid_queue, Nvalid, epoch, device):
     hv = {}
+    imgs = {}
 
     vae.eval()
     gp.eval()
 
     with torch.no_grad():
-        Zm.to(device)
-        gp.y = Zm
+        # gp posterior predictive
+        gp.y = Zm.to(device)
+        z_test_mu, _ = gp.posterior_predictive(Xtrain)
 
         for batch_i, data in enumerate(valid_queue):
-            print("eval minibatch")
             y_test = data['image'].unsqueeze(dim=1)
-            y_test.to(device)
-
-            # gp posterior
-            z_test_mu, _ = gp.posterior_predictive(Xtrain)
+            idxs = data['index']
+            y_test, idxs = y_test.to(device), idxs.to(device)
 
             # decode to get reconstructions
-            y_test_recon = vae.decode(z_test_mu)
+            y_test_recon = vae.decode(z_test_mu[idxs])
 
             # compute error
             recon_term, mse = vae.nll(y_test, y_test_recon)
             smartSum(hv, "mse_val", float(mse.data.sum().cpu()) / float(Nvalid))
             smartSum(hv, "recon_term", float(recon_term.data.sum().cpu()) / float(Nvalid))
 
-    return hv
+            # store a few examples
+            if batch_i == 0:
+                imgs = {}
+                imgs["Y"] = y_test[:24].data.cpu().numpy().transpose(0, 2, 3, 1)
+                imgs["Yr"] = y_test_recon[:24].data.cpu().numpy().transpose(0, 2, 3, 1)
+
+    return hv, imgs
 
 
 if __name__ == "__main__":

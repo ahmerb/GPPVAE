@@ -3,8 +3,6 @@ from torch import nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import scipy as sp
-import os
-import pdb
 
 
 def normalize_rows(x):
@@ -44,7 +42,7 @@ class Vmodel(nn.Module):
         super(Vmodel, self).__init__()
 
         # each feature vector (obj and view) is actually a word embedding
-        # that is, say obj id is 17, this maps to some word embedding (=feature vector) e.g. [1.0, 0.3332432, 5.432, ...]
+        # that is, say obj id is 17, this maps to some word embedding (=feature vector) e.g. [1.0, 0.3332432, 5.432,...]
         # P is number of obj's, p is the size of the word embedding (=feature vector)
         # Q is number of views, q is the size of the word embedding (=feature vector)
 
@@ -132,15 +130,17 @@ if __name__ == "__main__":
 
     #pdb.set_trace()
 
-    vm = Vmodel(P, Q, p, q)#.cuda()
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    vm = Vmodel(P, Q, p, q).to(device)
 
     # _d and _w
     _d = sp.kron(sp.arange(P), sp.ones(2))
     _w = sp.kron(sp.ones(2), sp.arange(Q))
 
     # d and w
-    d = Variable(torch.Tensor(_d).long(), requires_grad=False)#.cuda()
-    w = Variable(torch.Tensor(_w).long(), requires_grad=False)#.cuda()
+    d = Variable(torch.Tensor(_d).long(), requires_grad=False).to(device)
+    w = Variable(torch.Tensor(_w).long(), requires_grad=False).to(device)
 
     print(d.size())
     print(w.size())

@@ -2,10 +2,11 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-import h5py
 import scipy as sp
-import os
 import pdb
+from torch import optim
+import pylab as pl
+from train.faceplace.utils import smartAppend
 
 
 class GP(nn.Module):
@@ -18,8 +19,8 @@ class GP(nn.Module):
         self.vsum2one = vsum2one
 
         # define variables
-        n_vcs = n_rand_effs + 1
-        self.lvs = nn.Parameter(torch.zeros([n_vcs]))
+        self.n_vcs = n_rand_effs + 1
+        self.lvs = nn.Parameter(torch.zeros([self.n_vcs]))
 
     def U_UBi_Shb(self, Vs, vs):
 
@@ -49,7 +50,7 @@ class GP(nn.Module):
         if self.vsum2one:
             rv = F.softmax(self.lvs, 0)
         else:
-            rv = torch.exp(self.lvs) / float(n_vcs)
+            rv = torch.exp(self.lvs) / float(self.n_vcs)
         return rv
 
     def taylor_coeff(self, X, Vs):

@@ -107,7 +107,7 @@ class SparseGPRegression(nn.Module):
         #      = (W @ Dinv @ W.T + I) @ D  (divide by D)
         #      := K @ D
         W_Dinv = W / D  # MxN
-        K = W_Dinv.mm(W.t()) + torch.eye(M, M)  # MxM
+        K = W_Dinv.mm(W.t()) + torch.eye(M, M).to(W.device)  # MxM
 
         # Compute cholesky decomposition K = L @ L.T
         # where L is lower triangular
@@ -362,7 +362,9 @@ class SparseGPRegression(nn.Module):
         return loc + mu, cov
 
     def _zero_mean_function(self, x):
-        return x.new_zeros(x.shape)  # creates zero tensor with same shape, dtype, etc...
+        N = x.shape[0]  # num inputs, also equals w.shape[0]
+        L = self.y.shape[1:]  # output dimension
+        return x.new_zeros(N, *tuple(L))
 
     def _cholesky(self, M, upper=False):
         while True:

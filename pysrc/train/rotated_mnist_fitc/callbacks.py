@@ -103,21 +103,24 @@ def callback(epoch, val_queue, vae, history, figname, device):
 
         pl.tight_layout()
 
+        # print("Yv.min, Yv.max =", Yv[0].min(), Yv[0].max())
+        # print("Rv.min, Rv.max =", Rv[0].min(), Rv[0].max())
+
         # make plot
         pl.subplot(4, 2, 2)
-        _img = _compose(Yv[0:6], Rv[0:6])
+        _img = _compose(Yv[0:6], Rv[0:6].clip(0., 1.) * 255.0)
         pl.imshow(_img.squeeze())
 
         pl.subplot(4, 2, 4)
-        _img = _compose(Yv[6:12], Rv[6:12])
+        _img = _compose(Yv[6:12], Rv[6:12].clip(0., 1.) * 255.0)
         pl.imshow(_img.squeeze())
 
         pl.subplot(4, 2, 6)
-        _img = _compose(Yv[12:18], Rv[12:18])
+        _img = _compose(Yv[12:18], Rv[12:18].clip(0., 1.) * 255.0)
         pl.imshow(_img.squeeze())
 
         pl.subplot(4, 2, 8)
-        _img = _compose(Yv[18:24], Rv[18:24])
+        _img = _compose(Yv[18:24], Rv[18:24].clip(0., 1.) * 255.0)
         pl.imshow(_img.squeeze())
 
         pl.savefig(figname)
@@ -196,36 +199,38 @@ def callback_gppvae(epoch, history, covs, imgs, ffile):
     pl.subplot(4, 4, 10)
     pl.title("mse")
     pl.plot(history["mse"], "k")
-    # pl.plot(history["mse_val"], "r")
-    pl.ylim(0, 0.01)
+    pl.plot(history["mse_val"], "r")
+    # pl.ylim(0, 0.01) NOTE enable this again, or just leave it? (will use history.pkl for plots anyway)
 
     pl.subplot(4, 4, 13)
-    pl.title("Kxx")
-    pl.imshow(covs["Kxx"], vmin=-0.4, vmax=1)
+    pl.title("K")
+    pl.imshow(covs["K"], vmin=-0.4, vmax=1)
     pl.colorbar()
     pl.subplot(4, 4, 14)
-    pl.title("Kww")
-    pl.imshow(covs["Kww"], vmin=-0.4, vmax=1)
+    pl.title("Kuu")
+    pl.imshow(covs["Kuu"], vmin=-0.4, vmax=1)
     pl.colorbar()
 
-    Yv, Yr, Rv = imgs["Yv"], imgs["Yr"], imgs["Yo"]
+    Y, Yr = imgs["Y"], imgs["Yr"]
+
+    pl.tight_layout()
 
     # make plot
     pl.subplot(4, 2, 2)
-    _img = _compose_multi([Yv[0:6], Yr[0:6], Rv[0:6]])
-    pl.imshow(_img)
+    _img = _compose_multi([Y[0:6], Yr[0:6]])
+    pl.imshow(_img.squeeze())
 
     pl.subplot(4, 2, 4)
-    _img = _compose_multi([Yv[6:12], Yr[6:12], Rv[6:12]])
-    pl.imshow(_img)
+    _img = _compose_multi([Y[6:12], Yr[6:12]])
+    pl.imshow(_img.squeeze())
 
     pl.subplot(4, 2, 6)
-    _img = _compose_multi([Yv[12:18], Yr[12:18], Rv[12:18]])
-    pl.imshow(_img)
+    _img = _compose_multi([Y[12:18], Yr[12:18]])
+    pl.imshow(_img.squeeze())
 
     pl.subplot(4, 2, 8)
-    _img = _compose_multi([Yv[18:24], Yr[18:24], Rv[18:24]])
-    pl.imshow(_img)
+    _img = _compose_multi([Y[18:24], Yr[18:24]])
+    pl.imshow(_img.squeeze())
 
     pl.savefig(ffile)
     pl.close()

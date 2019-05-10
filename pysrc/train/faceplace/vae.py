@@ -1,13 +1,6 @@
-import sys
 import torch
-from torch import nn, optim
+from torch import nn
 import torch.nn.functional as F
-from torch.autograd import Variable
-import h5py
-import scipy as sp
-import os
-import pdb
-import pylab as pl
 
 
 def f_act(x, act="elu"):
@@ -124,6 +117,7 @@ class FaceVAE(nn.Module):
         )
         elbo = nll + kld
         return elbo, mse, nll, kld
+
 
 if __name__ == "__main__":
     net = FaceVAE()

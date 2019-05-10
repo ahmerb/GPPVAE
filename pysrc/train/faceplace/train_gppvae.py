@@ -1,26 +1,26 @@
 # flake8: noqa
 
-import matplotlib
-import sys
+import sys, os
 
-matplotlib.use("Agg")
+sys.path.insert(1, os.path.join(sys.path[0], '../..'))
+
+import matplotlib
 import torch
 from torch import nn, optim
 import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
-from vae import FaceVAE
-from vmod import Vmodel
-from gp import GP
+from train.faceplace.vae import FaceVAE
+from train.faceplace.vmod import Vmodel
+from train.faceplace.gp import GP
 import h5py
 import scipy as sp
-import os
 import pdb
 import logging
 import pylab as pl
-from utils import smartSum, smartAppendDict, smartAppend, export_scripts
-from callbacks import callback_gppvae
-from data_parser import read_face_data, FaceDataset
+from train.faceplace.utils import smartSum, smartAppendDict, smartAppend, export_scripts
+from train.faceplace.callbacks import callback_gppvae, save_history
+from train.faceplace.data_parser import read_face_data, FaceDataset
 from optparse import OptionParser
 import logging
 import pickle
@@ -32,20 +32,21 @@ parser.add_option(
     "--data",
     dest="data",
     type=str,
-    default="./data/data_faces.h5",
+    default="../../../data/data_faces.h5",
     help="dataset path",
 )
 parser.add_option(
-    "--outdir", dest="outdir", type=str, default="./out/gppvae", help="output dir"
+    "--outdir", dest="outdir", type=str, default="./out/gppvae_unison", help="output dir"
 )
-parser.add_option("--vae_cfg", dest="vae_cfg", type=str, default=None)
-parser.add_option("--vae_weights", dest="vae_weights", type=str, default=None)
+parser.add_option("--vae_cfg", dest="vae_cfg", type=str, default="./out/vae/vae.cfg.p") # ignore if training unsion
+parser.add_option("--vae_weights", dest="vae_weights", type=str, default="./out/vae/weights/weights.04950.pt") # ignore if training unsion
 parser.add_option("--seed", dest="seed", type=int, default=0, help="seed")
 parser.add_option(
     "--vae_lr",
     dest="vae_lr",
     type=float,
-    default=2e-4,
+    #default=3e-4,
+    default=1e-3,
     help="learning rate of vae params",
 )
 parser.add_option(
@@ -63,32 +64,48 @@ parser.add_option(
     help="number of epoch by which a callback (plot + dump weights) is executed",
 )
 parser.add_option(
-    "--epochs", dest="epochs", type=int, default=10000, help="total number of epochs"
+    "--epochs", dest="epochs", type=int, default=5500, help="total number of epochs"
 )
 parser.add_option("--debug", action="store_true", dest="debug", default=False)
+parser.add_option("--train_unison", action="store_true", dest="train_unison", default=False)
+# only use below options if train_unison is True
+parser.add_option(
+    "--filts", dest="filts", type=int, default=32, help="number of convol filters"
+)
+parser.add_option("--zdim", dest="zdim", type=int, default=256, help="zdim")
+parser.add_option(
+    "--vy", dest="vy", type=float, default=2e-3, help="conditional norm lik variance"
+)
 (opt, args) = parser.parse_args()
 opt_dict = vars(opt)
 
 
-if opt.vae_cfg is None:
-    opt.vae_cfg = "./out/vae/vae.cfg.p"
-vae_cfg = pickle.load(open(opt.vae_cfg, "rb"))
+# vae config
+vae_cfg = None
+if opt.train_unison:
+    vae_cfg = {"nf": opt.filts, "zdim": opt.zdim, "vy": opt.vy}
+    pickle.dump(vae_cfg, open(os.path.join(opt.outdir, "vae_unison.cfg.p"), "wb"))
+else:
+    vae_cfg = pickle.load(open(opt.vae_cfg, "rb"))
 
-if opt.vae_weights is None:
-    opt.vae_weights = "./out/vae/weights/weights.00000.pt"
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+if not torch.cuda.is_available():
+    matplotlib.use("Qt5Agg")
 
 if not os.path.exists(opt.outdir):
     os.makedirs(opt.outdir)
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
 # output dir
 wdir = os.path.join(opt.outdir, "weights")
 fdir = os.path.join(opt.outdir, "plots")
+hdir = os.path.join(opt.outdir, "history")
 if not os.path.exists(wdir):
     os.makedirs(wdir)
 if not os.path.exists(fdir):
     os.makedirs(fdir)
+if not os.path.exists(hdir):
+    os.makedirs(hdir)
+
 
 # copy code to output folder
 export_scripts(os.path.join(opt.outdir, "scripts"))
@@ -128,23 +145,24 @@ def main():
     # Dt (Dv) is a 1d arr, each element being an id of the person in the corresponding img
     # Wt (Wv) is a 1d arr, each element being a number 0 to 8 representing rotation angle? (i think)
     # so, these tensors just hold id's, not the object and feature vectors themselves (which are unobserved) (i think)
-    Dt = Variable(obj["train"][:, 0].long(), requires_grad=False)#.cuda()
-    Wt = Variable(view["train"][:, 0].long(), requires_grad=False)#.cuda()
-    Dv = Variable(obj["val"][:, 0].long(), requires_grad=False)#.cuda()
-    Wv = Variable(view["val"][:, 0].long(), requires_grad=False)#.cuda()
+    Dt = Variable(obj["train"][:, 0].long(), requires_grad=False).to(device)
+    Wt = Variable(view["train"][:, 0].long(), requires_grad=False).to(device)
+    Dv = Variable(obj["val"][:, 0].long(), requires_grad=False).to(device)
+    Wv = Variable(view["val"][:, 0].long(), requires_grad=False).to(device)
     # print("Dv.size = ", Dv.size()); print(Dv); return
     # print("Wv.size = ", Wv.size()); print(Wv); return
 
     # define VAE and optimizer
     vae = FaceVAE(**vae_cfg).to(device)
-    RV = torch.load(opt.vae_weights, map_location='cpu') # remove map_location when using gpu
-    vae.load_state_dict(RV)
-    vae.to(device)
+    if not opt.train_unison:
+        RV = torch.load(opt.vae_weights, map_location=device) # remove map_location when using gpu
+        vae.load_state_dict(RV)
+        vae.to(device)
 
     # define gp
     P = sp.unique(obj["train"]).shape[0] # number unique obj's
     Q = sp.unique(view["train"]).shape[0] # number unique views
-    vm = Vmodel(P, Q, opt.xdim, Q)#.cuda() # low-rank approx
+    vm = Vmodel(P, Q, opt.xdim, Q).to(device) # low-rank approx
     gp = GP(n_rand_effs=1).to(device)
     gp_params = nn.ParameterList()
     gp_params.extend(vm.parameters())
@@ -165,7 +183,7 @@ def main():
 
         # 2. sample Z
         # sample a z for each encoding (zm,zs) above
-        Eps = Variable(torch.randn(*Zs.shape), requires_grad=False)#.cuda()
+        Eps = Variable(torch.randn(*Zs.shape), requires_grad=False).to(device)
         Z = Zm + Eps * Zs
 
         # 3. evaluation step (not needed for training)
@@ -215,6 +233,7 @@ def main():
             ffile = os.path.join(opt.outdir, "plot.%.5d.png" % epoch)
             callback_gppvae(epoch, history, covs, imgs, ffile)
 
+    save_history(history, hdir, pickle=True)
 
 def encode_Y(vae, train_queue):
     # finds encoding of every single datapoint
@@ -225,13 +244,13 @@ def encode_Y(vae, train_queue):
     with torch.no_grad():
 
         n = train_queue.dataset.Y.shape[0]
-        Zm = Variable(torch.zeros(n, vae_cfg["zdim"]), requires_grad=False)#.cuda()
-        Zs = Variable(torch.zeros(n, vae_cfg["zdim"]), requires_grad=False)#.cuda()
+        Zm = Variable(torch.zeros(n, vae_cfg["zdim"]), requires_grad=False).to(device)
+        Zs = Variable(torch.zeros(n, vae_cfg["zdim"]), requires_grad=False).to(device)
 
         for batch_i, data in enumerate(train_queue):
             # data = [ imgs, objs, views, indices of corresponding data ]
-            y = data[0]#.cuda()
-            idxs = data[-1]#.cuda()
+            y = data[0].to(device)
+            idxs = data[-1].to(device)
             zm, zs = vae.encode(y)
             Zm[idxs], Zs[idxs] = zm.detach(), zs.detach()
 
@@ -253,11 +272,11 @@ def eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv):
         U, UBi, _ = gp.U_UBi_Shb([Vt], vs)
         Kiz = gp.solve(Zm, U, UBi, vs)
         Zo = vs[0] * Vv.mm(Vt.transpose(0, 1).mm(Kiz))
-        mse_out = Variable(torch.zeros(Vv.shape[0], 1), requires_grad=False)#.cuda()
-        mse_val = Variable(torch.zeros(Vv.shape[0], 1), requires_grad=False)#.cuda()
+        mse_out = Variable(torch.zeros(Vv.shape[0], 1), requires_grad=False).to(device)
+        mse_val = Variable(torch.zeros(Vv.shape[0], 1), requires_grad=False).to(device)
         for batch_i, data in enumerate(val_queue):
-            idxs = data[-1]#.cuda()
-            Yv = data[0]#.cuda()
+            idxs = data[-1].to(device)
+            Yv = data[0].to(device)
             Zv = vae.encode(Yv)[0].detach() # gets the mean (ignored z_sigma output)
             Yr = vae.decode(Zv)
             Yo = vae.decode(Zo[idxs])
@@ -295,7 +314,7 @@ def backprop_and_update(
     for batch_i, data in enumerate(train_queue):
 
         # subset data: (data[-1] gives indices of datapoints in this minibatch)
-        y = data[0]#.cuda()
+        y = data[0].to(device)
         eps = Eps[data[-1]]
         _d = Dt[data[-1]]
         _w = Wt[data[-1]]
