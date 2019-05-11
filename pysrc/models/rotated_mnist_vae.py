@@ -111,7 +111,7 @@ class RotatedMnistVAE(nn.Module):
         for cell in self.dconv:
             x = cell(x)
         # print(" xr is nan? =", torch.isnan(x).sum())
-        x = F.relu(x)
+        x = F.relu(x) # make all image pixel values above zero
         return x
 
     def nll(self, x, xr):
