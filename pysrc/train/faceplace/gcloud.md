@@ -13,3 +13,10 @@ nohup python train_gppvae.py --epochs 5500 --train_unison &> train_gppvae_unison
 
 python train_gppvae.py --epochs 10 --epoch_cb 1 --train_unison
 ```
+
+train gppvae
+
+```bash
+nohup python train_gppvae.py --epochs 1000 --vae_cfg ./out/vae/vae.cfg.p --vae_weights ./out/vae/weights/weights.04900.pt --outdir ./out/gppvae &> train_gppvae.out &
+```
+
