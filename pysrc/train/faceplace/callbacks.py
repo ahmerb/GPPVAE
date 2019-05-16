@@ -57,12 +57,15 @@ def callback(epoch, val_queue, vae, history, figname, device):
         # compute z
         zm = []
         zs = []
+        ws = []
         for batch_i, data in enumerate(val_queue):
             y = data[0].to(device)
-            _zm, _zs = vae.encode(y)
+            w = data[2].to(device)
+            _zm, _zs = vae.encode(y, w)
             zm.append(_zm.data.cpu().numpy())
             zs.append(_zs.data.cpu().numpy())
-        zm, zs = sp.concatenate(zm, 0), sp.concatenate(zs, 0)
+            ws.append(w.data.cpu().numpy())
+        zm, zs, ws = sp.concatenate(zm, 0), sp.concatenate(zs, 0), sp.concatenate(ws, 0)
 
         # init fig
         pl.figure(1, figsize=(8, 8))
@@ -94,7 +97,8 @@ def callback(epoch, val_queue, vae, history, figname, device):
 
         # val reconstructions
         _zm = Variable(torch.tensor(zm[:24]), requires_grad=False).to(device)
-        Rv = vae.decode(_zm[:24]).data.cpu().numpy().transpose((0, 2, 3, 1))
+        _w = Variable(torch.tensor(ws[:24]), requires_grad=False).to(device)
+        Rv = vae.decode(_zm[:24], _w).data.cpu().numpy().transpose((0, 2, 3, 1))
         Yv = val_queue.dataset.Y[:24].numpy().transpose((0, 2, 3, 1))
 
         # make plot

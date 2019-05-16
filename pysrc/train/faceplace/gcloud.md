@@ -6,6 +6,12 @@ nohup python train_vae.py --outdir ./out/vae --data ../../../data/data_faces.h5 
 python train_vae.py --outdir ./out/vae --data ../../../data/data_faces.h5 --epochs 10 --epoch_cb 1 --lr 0.001
 ```
 
+train cvae
+
+```bash
+nohup python train_cvae.py --outdir ./out/cvae --data ../../../data/data_faces.h5 --epochs 5000 --lr 0.001 &> train_cvae.out &
+```
+
 training in unison
 
 ```bash
