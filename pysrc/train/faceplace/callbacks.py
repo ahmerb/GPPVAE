@@ -50,6 +50,7 @@ def save_history(history, hdir, pickle=False):
         f.close()
 
 
+# TODO: I accidentally made this now work with only cvae, not vae
 def callback(epoch, val_queue, vae, history, figname, device):
 
     with torch.no_grad():

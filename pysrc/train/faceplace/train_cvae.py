@@ -154,6 +154,21 @@ def train_ep(vae, train_queue, optimizer):
         # back propagate
         optimizer.zero_grad()
         loss.backward()
+
+        # if gradient explosion, should get progressively bigger until NaNs
+        print("loss=", loss)
+        print("decoder (max_weight, max_grad)")
+        for layer in reversed(vae.dconv):
+            print(torch.max(layer.conv1.weight), torch.max(layer.conv1.weight.grad))
+        print(torch.max(vae.dense_dec.weight), torch.max(vae.dense_dec.weight.grad))
+        print("encoder (max_weight, max_grad)")
+        print(torch.max(vae.dense_zm.weight), torch.max(vae.dense_zm.weight.grad))
+        print(torch.max(vae.dense_zs.weight), torch.max(vae.dense_zs.weight.grad))
+        for layer in reversed(vae.econv):
+            print(torch.max(layer.conv1.weight), torch.max(layer.conv1.weight.grad))
+
+        print("total econv[0].conv1.weight nans =", torch.isnan(vae.econv[0].conv1.weight))
+
         optimizer.step()
 
         # sum metrics

@@ -127,6 +127,84 @@ def callback(epoch, val_queue, vae, history, figname, device):
         pl.close()
 
 
+def callback_cvae(epoch, val_queue, vae, history, figname, device):
+    with torch.no_grad():
+
+        # compute z
+        zm = []
+        zs = []
+        ws = []
+        for batch_i, data in enumerate(val_queue):
+            y = data['image'].unsqueeze(dim=1).to(device)
+            w = data['rotation'].to(device)
+            _zm, _zs = vae.encode(y, w)
+            zm.append(_zm.data.cpu().numpy())
+            zs.append(_zs.data.cpu().numpy())
+            ws.append(w.data.cpu().numpy())
+        zm, zs, ws = sp.concatenate(zm, 0), sp.concatenate(zs, 0), sp.concatenate(ws, 0)
+
+        # init fig
+        pl.figure(1, figsize=(8, 8))
+
+        # plot history
+        xs = sp.arange(1, epoch + 2)
+        keys = ["loss", "nll", "kld", "mse"]
+        plots = [1, 2, 5, 6]
+        for ik, key in enumerate(keys):
+            pl.subplot(4, 4, plots[ik])
+            pl.title(key)
+            pl.plot(xs, history[key], "k")
+            if key not in ["lr", "vy"]:
+                pl.plot(xs, history[key + "_val"], "r")
+            if key == "mse":
+                pl.ylim(0.0, 0.01)
+
+        # plot hist of zm and zs
+        pl.subplot(4, 4, 13)
+        pl.title("Zm")
+        _y, _x = np.histogram(zm.ravel(), 30)
+        _x = 0.5 * (_x[:-1] + _x[1:])
+        pl.plot(_x, _y, "k")
+        pl.subplot(4, 4, 14)
+        pl.title("log$_{10}$Zs")
+        _y, _x = np.histogram(sp.log10(zs.ravel()), 30)
+        _x = 0.5 * (_x[:-1] + _x[1:])
+        pl.plot(_x, _y, "k")
+
+        # val reconstructions
+        _zm = Variable(torch.tensor(zm[:24]), requires_grad=False).to(device)
+        _w = Variable(torch.tensor(ws[:24]), requires_grad=False).to(device)
+        Rv = vae.decode(_zm[:24], _w).data.cpu().numpy().transpose((0, 2, 3, 1))
+        valid_ims = list(map(lambda datum: np.asarray(datum[0].resize((32, 32), resample=2)),
+                             val_queue.dataset.data[:24]))
+        Yv = np.expand_dims(valid_ims, axis=1).transpose((0, 2, 3, 1))
+
+        pl.tight_layout()
+
+        # print("Yv.min, Yv.max =", Yv[0].min(), Yv[0].max())
+        # print("Rv.min, Rv.max =", Rv[0].min(), Rv[0].max())
+
+        # make plot
+        pl.subplot(4, 2, 2)
+        _img = _compose(Yv[0:6], Rv[0:6].clip(0., 1.) * 255.0)
+        pl.imshow(_img.squeeze())
+
+        pl.subplot(4, 2, 4)
+        _img = _compose(Yv[6:12], Rv[6:12].clip(0., 1.) * 255.0)
+        pl.imshow(_img.squeeze())
+
+        pl.subplot(4, 2, 6)
+        _img = _compose(Yv[12:18], Rv[12:18].clip(0., 1.) * 255.0)
+        pl.imshow(_img.squeeze())
+
+        pl.subplot(4, 2, 8)
+        _img = _compose(Yv[18:24], Rv[18:24].clip(0., 1.) * 255.0)
+        pl.imshow(_img.squeeze())
+
+        pl.savefig(figname)
+        pl.close()
+
+
 def callback_gppvae0(epoch, history, covs, imgs, ffile):
 
     # init fig

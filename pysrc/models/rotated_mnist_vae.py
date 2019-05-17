@@ -51,14 +51,18 @@ class Conv2dCellUp(nn.Module):
 class RotatedMnistVAE(nn.Module):
     # nf: in and out channels per conv2d layer (except first conv layer is 'colors' in channels and 'nf' out channels)
     def __init__(
-        self, img_size=28, nf=8, zdim=16, steps=3, colors=1, act="elu", vy=1e-3
+        self, img_size=28, nf=8, zdim=16, steps=3, colors=1, act="elu", vy=1e-3, cvae=False
     ):
 
         super(RotatedMnistVAE, self).__init__()
 
+        # if cvae=True, stack (sinw, cosw) then make CVAE
+        self.cvae = cvae
+
         # store useful stuff
 
         # output size on last conv layer = (nf x red_img_size x red_img_size)
+        self.img_size = img_size
         self.red_img_size = math.ceil(img_size / (2 ** steps))
         self.nf = nf # number of filters per conv layer
         self.size_flat = self.red_img_size ** 2 * nf # size of fully connect layer will be size_flat -> zdim
@@ -68,9 +72,11 @@ class RotatedMnistVAE(nn.Module):
         # define variance
         self.vy = nn.Parameter(torch.Tensor([vy]), requires_grad=False)
 
+        n_channels = colors + 2 if cvae else colors # extra channels for sinw, cosw
+
         # conv cells encoder
         self.econv = nn.ModuleList()
-        cell = Conv2dCellDown(colors, nf, ks, act)
+        cell = Conv2dCellDown(n_channels, nf, ks, act)
         self.econv += [cell]
         for i in range(steps - 1):
             cell = Conv2dCellDown(nf, nf, ks, act)
@@ -78,7 +84,9 @@ class RotatedMnistVAE(nn.Module):
 
         # conv cells decoder
         self.dconv = nn.ModuleList()
-        for i in range(steps - 1):
+        cell = Conv2dCellUp(nf + 2, nf, ks, act1=act, act2=act) if cvae else Conv2dCellUp(nf, nf, ks, act1=act, act2=act)
+        self.dconv += [cell]
+        for i in range(steps - 2):
             cell = Conv2dCellUp(nf, nf, ks, act1=act, act2=act)
             self.dconv += [cell]
         cell = Conv2dCellUp(nf, colors, ks, act1=act, act2="linear")
@@ -87,9 +95,15 @@ class RotatedMnistVAE(nn.Module):
         # dense layers
         self.dense_zm = nn.Linear(self.size_flat, zdim)
         self.dense_zs = nn.Linear(self.size_flat, zdim)
-        self.dense_dec = nn.Linear(zdim, self.size_flat)
+        self.dense_dec = nn.Linear(zdim + 2, self.size_flat) if cvae else nn.Linear(zdim, self.size_flat)
 
-    def encode(self, x):
+    def encode(self, x, w=None):
+        if self.cvae:
+            # add sin and cos of rotation angle as extra channels to image
+            sin_w = torch.sin(w).reshape(-1, 1, 1, 1).expand(-1, 1, self.img_size, self.img_size)
+            cos_w = torch.cos(w).reshape(-1, 1, 1, 1).expand(-1, 1, self.img_size, self.img_size)
+            x = torch.cat((x, sin_w, cos_w), dim=1)
+
         for ic, cell in enumerate(self.econv):
             x = cell(x)
         x = x.view(-1, self.size_flat)
@@ -105,9 +119,20 @@ class RotatedMnistVAE(nn.Module):
         z = zm + eps * zs
         return z
 
-    def decode(self, x):
+    def decode(self, x, w=None):
+        if self.cvae:
+            # add [sinw,cosw] to end of latent vector z
+            x = torch.cat((x, torch.sin(w), torch.cos(w)), dim=1)
+
         x = self.dense_dec(x)
         x = x.view(-1, self.nf, self.red_img_size, self.red_img_size)
+
+        if self.cvae:
+            # add sin and cos of rotation angle as extra channels to image
+            sin_w = torch.sin(w).reshape(-1, 1, 1, 1).expand(-1, 1, self.red_img_size, self.red_img_size)
+            cos_w = torch.cos(w).reshape(-1, 1, 1, 1).expand(-1, 1, self.red_img_size, self.red_img_size)
+            x = torch.cat((x, sin_w, cos_w), dim=1)
+
         for cell in self.dconv:
             x = cell(x)
         # print(" xr is nan? =", torch.isnan(x).sum())
@@ -123,12 +148,12 @@ class RotatedMnistVAE(nn.Module):
         nll += 0.5 * torch.log(self.vy)
         return nll, mse
 
-    def forward(self, x, eps):
-        zm, zs = self.encode(x)
+    def forward(self, x, eps, w=None):
+        zm, zs = self.encode(x, w)
         z = zm + eps * zs
         # print("eps is nan? =", torch.isnan(eps).sum())
         # print("  z is nan? =", torch.isnan(z).sum())
-        xr = self.decode(z)
+        xr = self.decode(z, w)
         nll, mse = self.nll(x, xr)
         kld = (
             -0.5 * (1 + 2 * torch.log(zs) - zm ** 2 - zs ** 2).sum(1)[:, None] / self.K
