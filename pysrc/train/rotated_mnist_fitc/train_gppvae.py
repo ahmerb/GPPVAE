@@ -25,7 +25,6 @@ from train.rotated_mnist_fitc.callbacks import callback_gppvae, save_history
 from train.rotated_mnist_fitc.rotated_mnist import RotatedMnistDataset, ToTensor, Resize, getMnistPilThrees
 
 
-# TODO upgrade from optparse to argparse
 parser = OptionParser()
 parser.add_option(
     "--data",
@@ -48,7 +47,7 @@ parser.add_option(
     help="learning rate of vae params",
 )
 parser.add_option(
-    "--gp_lr", dest="gp_lr", type=float, default=1e-3, help="learning rate of gp params"
+    "--gp_lr", dest="gp_lr", type=float, default=3e-3, help="learning rate of gp params"
 )
 parser.add_option(
     "--xdim", dest="xdim", type=int, default=1, help="rank of object linear covariance"
@@ -65,13 +64,27 @@ parser.add_option(
     "--epochs", dest="epochs", type=int, default=500, help="total number of epochs"
 )
 parser.add_option("--debug", action="store_true", dest="debug", default=False)
+parser.add_option("--train_unison", action="store_true", dest="train_unison", default=False)
+# only use below options if train_unison is True
+parser.add_option(
+    "--filts", dest="filts", type=int, default=8, help="number of convol filters"
+)
+parser.add_option("--zdim", dest="zdim", type=int, default=16, help="zdim")
+parser.add_option(
+    "--vy", dest="vy", type=float, default=2e-3, help="conditional norm lik variance"
+)
 (opt, args) = parser.parse_args()
 opt_dict = vars(opt)
 
 # parse args
 
 # VAE config
-vae_cfg = pickle.load(open(opt.vae_cfg, "rb"))
+vae_cfg = None
+if opt.train_unison:
+    vae_cfg = {"img_size": 32, "nf": opt.filts, "zdim": opt.zdim, "steps": 3, "colors": 1, "vy": opt.vy}
+    pickle.dump(vae_cfg, open(os.path.join(opt.outdir, "vae_unison.cfg.p"), "wb"))
+else:
+    vae_cfg = pickle.load(open(opt.vae_cfg, "rb"))
 z_dim = vae_cfg["zdim"]
 
 # device
@@ -145,10 +158,11 @@ def main():
     num_rotations = 16 # number of unique rotation angles
 
     # define VAE
-    vae = RotatedMnistVAE(**vae_cfg)
-    vae_state = torch.load(opt.vae_weights, map_location=device)
-    vae.load_state_dict(vae_state)
-    vae.to(device)
+    vae = RotatedMnistVAE(**vae_cfg).to(device)
+    if not opt.train_unison:
+        vae_state = torch.load(opt.vae_weights, map_location=device)
+        vae.load_state_dict(vae_state)
+        vae.to(device)
 
     # define GP
 
@@ -281,6 +295,13 @@ def evaluate_gppvae(vae, gp, Zm, Xtrain, valid_queue, Nvalid, epoch, device):
     with torch.no_grad():
         # gp posterior predictive
         gp.y = Zm.to(device)
+
+        # TODO
+        # why this line?
+        # why not just get z* for each batch x*??
+        # that follows pred post procedure too
+        # TODO
+        # implement caching in gp.posterior_predictive
         z_test_mu, _ = gp.posterior_predictive(Xtrain)
 
         for batch_i, data in enumerate(valid_queue):

@@ -167,7 +167,7 @@ def train_ep(vae, train_queue, optimizer):
         for layer in reversed(vae.econv):
             print(torch.max(layer.conv1.weight), torch.max(layer.conv1.weight.grad))
 
-        print("total econv[0].conv1.weight nans =", torch.isnan(vae.econv[0].conv1.weight))
+        print("total econv[0].conv1.weight nans =", torch.isnan(vae.econv[0].conv1.weight).sum())
 
         optimizer.step()
 

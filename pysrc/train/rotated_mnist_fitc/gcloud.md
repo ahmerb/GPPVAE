@@ -12,16 +12,16 @@ python train_vae.py --outdir ./out/vae2 --epochs 100 --epoch_cb 10 --lr 0.0003
 
 ---
 
-gppvae_fitc
+gppvae_fitc unison
 
 ```bash
-nohup python train_gppvae.py &> train_vae.out &
+nohup python train_gppvae.py  --outdir ./out/gppvae_unison --epochs 3000 --epoch_cb 50 --vae_lr 0.0003 --gp_lr 0.003 --train_unison &> train_gppvae_unison.out &
 ```
 
 or for testing stuff
 
 ```bash
-python train_gppvae.py --epochs 10 --epoch_cb 1
+python train_gppvae.py --outdir ./out/gppvae_unison --epochs 10 --epoch_cb 1 --vae_lr 0.0003 --gp_lr 0.003 --train_unison
 ```
 
 ---
