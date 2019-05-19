@@ -1,7 +1,7 @@
 run
 
 ```bash
-nohup python train_vae.py --outdir ./out/vae --epochs 1000 --epoch_cb 50 --lr 0.0003 &> train_vae.out &
+nohup python train_vae.py --outdir ./out/vae --epochs 3000 --epoch_cb 50 --lr 0.0003 &> train_vae.out &
 ```
 
 or for testing stuff

@@ -176,6 +176,9 @@ def main():
     Xtrain = torch.tensor(
         list(map(lambda datapoint: float(datapoint[1]), train_data.data)),
     ).to(device)
+    Xvalid = torch.tensor(
+        list(map(lambda datapoint: float(datapoint[1]), valid_data.data)),
+    ).to(device)
 
     # init gp
     kernel = RotationKernel
@@ -248,7 +251,7 @@ def main():
         gp_optimizer.step()
 
         # eval on validation set (using GPPVAE posterior predictive)
-        hv, imgs = evaluate_gppvae(vae, gp, Zm, Xtrain, valid_queue, Nvalid, epoch, device)
+        hv, imgs = evaluate_gppvae(vae, gp, Zm, Xvalid, valid_queue, Nvalid, epoch, device)
 
         smartSum(ht, "mse", float(mse.data.sum().cpu()) / float(Ntrain))
         smartSum(ht, "gp_nll", float(gp_nll.data.cpu()) / float(Ntrain))
@@ -285,7 +288,7 @@ def compute_covs(min_rot_angle, max_rot_angle, num_rotations, Xu, kernel, device
     return {"K": K, "Kuu": Kuu}
 
 
-def evaluate_gppvae(vae, gp, Zm, Xtrain, valid_queue, Nvalid, epoch, device):
+def evaluate_gppvae(vae, gp, Zm, Xvalid, valid_queue, Nvalid, epoch, device):
     hv = {}
     imgs = {}
 
@@ -295,14 +298,7 @@ def evaluate_gppvae(vae, gp, Zm, Xtrain, valid_queue, Nvalid, epoch, device):
     with torch.no_grad():
         # gp posterior predictive
         gp.y = Zm.to(device)
-
-        # TODO
-        # why this line?
-        # why not just get z* for each batch x*??
-        # that follows pred post procedure too
-        # TODO
-        # implement caching in gp.posterior_predictive
-        z_test_mu, _ = gp.posterior_predictive(Xtrain)
+        z_test_mu, _ = gp.posterior_predictive(Xvalid)
 
         for batch_i, data in enumerate(valid_queue):
             y_test = data['image'].unsqueeze(dim=1)
