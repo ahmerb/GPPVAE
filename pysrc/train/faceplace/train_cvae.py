@@ -60,7 +60,7 @@ opt_dict = vars(opt)
 if not os.path.exists(opt.outdir):
     os.makedirs(opt.outdir)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 # output dir
 wdir = os.path.join(opt.outdir, "weights")
@@ -133,8 +133,7 @@ def main():
             ffile = os.path.join(fdir, "plot.%.5d.png" % epoch)
             torch.save(vae.state_dict(), wfile)
             callback(epoch, val_queue, vae, history, ffile, device)
-
-    save_history(history, hdir, pickle=True)
+            save_history(history, hdir, pickle=True)
 
 
 def train_ep(vae, train_queue, optimizer):

@@ -7,9 +7,16 @@ matplotlib.use("Qt5Agg")
 
 
 class Plotter():
-    def __init__(self, vae_file_path="../out/vae/history/history.pkl", gppvae_file_path="../out/gppvae/history/history.pkl", gppvae_unison_file_path="../out/gppvae_unison/history/history.pkl", interactive_mode=False):
+    def __init__(
+        self,
+        vae_file_path="../out/vae/history/history.pkl",
+        gppvae_file_path="../out/gppvae/history/history.pkl",
+        gppvae_unison_file_path="../out/gppvae_unison/history/history.pkl",
+        cvae_file_path="../out/cvae/history/history.pkl",
+        interactive_mode=False):
         self.gppvae_unison_file_path = gppvae_unison_file_path
-        # dict_keys(['mse_out', 'mse_val', 'gp_nll', 'mse', 'recon_term', 'pen_term', 'loss', 'vs_1', 'vs_2', 'vars_1', 'vars_2'])
+        # dict_keys(['mse_out', 'mse_val', 'gp_nll', 'mse', 'recon_term',
+        #            'pen_term', 'loss', 'vs_1', 'vs_2', 'vars_1', 'vars_2'])
         self.gppvae_unison_history = self.load_gppvae_unison_history()
         self.N_gppvae_unison = len(self.gppvae_unison_history['mse'])
 
@@ -21,10 +28,21 @@ class Plotter():
         self.vae_history = self.load_vae_history()
         self.N_vae = len(self.vae_history['mse'])
 
-        self.interactive_mode = False
+        # print(self.N_gppvae_unison, self.N_gppvae, self.N_vae)
+
+        # self.cvae_file_path = cvae_file_path
+        # self.cvae_history = self.load_cvae_history()
+        # self.N_cvae = len(self.cvae_history['mse'])
+
+        self.interactive_mode = interactive_mode
 
     def load_vae_history(self):
         with open(self.vae_file_path, "rb") as f:
+            history = pickle.load(f)
+            return history
+
+    def load_cvae_history(self):
+        with open(self.cvae_file_path, "rb") as f:
             history = pickle.load(f)
             return history
 
@@ -65,9 +83,10 @@ class Plotter():
                                                                   self.gppvae_history['mse_val'][-1],
                                                                   self.vae_history['mse_val'][-1]))
         ax.set_xticks(x_index)
-        ax.set_xticklabels(['VAE', 'GPPVAE-separate', 'GPPVAE-unison'])
+        # ax.set_xticklabels(['VAE', 'GPPVAE-separate', 'GPPVAE-unison'])
+        ax.set_xticklabels(['GPPVAE-unison', 'GPPVAE-separate', 'VAE'])
         ax.set_ylabel('Mean Squared Error (validation)')
-        self._show("mse_valid_bar.eps")
+        self._show("mse_valid_bar2.eps")
 
         # train plots
         fig, ax = plt.subplots()
@@ -76,9 +95,10 @@ class Plotter():
                                                                   self.gppvae_history['mse'][-1],
                                                                   self.vae_history['mse'][-1]))
         ax.set_xticks(x_index)
-        ax.set_xticklabels(['VAE', 'GPPVAE-separate', 'GPPVAE-unison'])
+        # ax.set_xticklabels(['VAE', 'GPPVAE-separate', 'GPPVAE-unison'])
+        ax.set_xticklabels(['GPPVAE-unison', 'GPPVAE-separate', 'VAE'])
         ax.set_ylabel('Mean Squared Error (train)')
-        self._show("mse_train_bar.eps")
+        self._show("mse_train_bar2.eps")
 
     def plot_vae_curves(
         self,
@@ -176,10 +196,73 @@ class Plotter():
             ax.grid(which='both', axis='both')
             self._show(filenames[key])
 
+    def plot_cvae_curves(
+        self,
+        filenames={
+            "mse": "cvae_mse.eps",
+            "nll": "cvae_nll.eps",
+            "kld": "cvae_kld.eps",
+            "loss": "cvae_loss.eps",
+            "mse_val": "cvae_mse_val.eps",
+            "nll_val": "cvae_nll_val.eps",
+            "kld_val": "cvae_kld_val.eps",
+            "loss_val": "cvae_loss_val.eps"
+        },
+        ylabels={
+            "mse": "Mean squared error (train)",
+            "nll": "Negative log likelihood (train)",
+            "kld": "KL divergence (train)", # \(q_{\bm{\varphi}}(\mathbf{z}|\mathbf{y})\)
+            "loss": "Loss (train)",
+            "mse_val": "Mean squared error (validation)",
+            "nll_val": "Negative los likelihood (validation)",
+            "kld_val": "KL divergence (validation)",
+            "loss_val": "Loss (validation)"
+        }
+    ):
+        xs = np.arange(0, self.N_cvae, 1)
+        plot_keys = filenames.keys()
+        for key in plot_keys:
+            fig, ax = plt.subplots()
+            ys = self.cvae_history[key]
+            ax.plot(xs, ys)
+            ax.set_xlabel('# Epochs')
+            ax.set_ylabel(ylabels[key])
+            ax.grid(which='both', axis='both')
+            self._show(filenames[key])
+
+    def plot_mse_bars_for_failed_cvae(self):
+        N = 2334 # last epoch before cvae failed
+        cvae_train_mse = 0.001447
+        cvae_test_mse = 0.002585
+
+        # valid plots
+        fig, ax = plt.subplots()
+        x_index = np.arange(0, 3)
+        bar_gppvae_unison, bar_vae, bar_cvae = ax.bar(x_index, (self.gppvae_unison_history['mse_val'][N],
+                                                                self.vae_history['mse_val'][N],
+                                                                cvae_test_mse))
+        ax.set_xticks(x_index)
+        ax.set_xticklabels(['GPPVAE-unison', 'VAE', 'CVAE'])
+        ax.set_ylabel('Mean Squared Error (validation) after 2334 epochs')
+        self._show("mse_valid_bar_with_failed_cvae.eps")
+
+        # train plots
+        fig, ax = plt.subplots()
+        x_index = np.arange(0, 3)
+        bar_gppvae_unison, bar_vae, bar_cvae = ax.bar(x_index, (self.gppvae_unison_history['mse'][N],
+                                                                self.vae_history['mse'][N],
+                                                                cvae_train_mse))
+        ax.set_xticks(x_index)
+        ax.set_xticklabels(['GPPVAE-unison', 'VAE', 'CVAE'])
+        ax.set_ylabel('Mean Squared Error (train) after 2334 epochs')
+        self._show("mse_train_bar_with_failed_cvae.eps")
+
 
 if __name__ == "__main__":
     plotter = Plotter(interactive_mode=False)
     # plotter.plot_gppvae_unison_curves()
     # plotter.plot_vae_curves()
-    plotter.plot_gppvae_curves()
+    # plotter.plot_gppvae_curves()
+    # plotter.plot_cvae_curves()
     plotter.plot_mse_bars()
+    # plotter.plot_mse_bars_for_failed_cvae()

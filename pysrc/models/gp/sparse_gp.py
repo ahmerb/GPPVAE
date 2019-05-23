@@ -57,7 +57,7 @@ class SparseGPRegression(nn.Module):
         Kffdiag = self.Kffdiag()
 
         Luu = self._cholesky(Kuu)  # MxM
-        W = torch.trtrs(Kfu.t(), Luu, upper=False)[0].t()  # NxM
+        W = torch.trtrs(Kfu.t(), Luu, upper=False)[0].t()  # NxM, solves Luu @ W.T = Kuf
         # W.T = LuuInv @ Kuf
         # MxN     MxM    MxN
 

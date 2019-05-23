@@ -18,6 +18,8 @@ gppvae_fitc unison
 nohup python train_gppvae.py  --outdir ./out/gppvae_unison --epochs 3000 --epoch_cb 50 --vae_lr 0.0003 --gp_lr 0.003 --train_unison &> train_gppvae_unison.out &
 ```
 
+nohup python train_gppvae2.py  --outdir ./out/gppvae_unison2 --epochs 3000 --epoch_cb 50 --vae_lr 0.0003 --gp_lr 0.003 --train_unison &> train_gppvae_unison2.out &
+
 or for testing stuff
 
 ```bash

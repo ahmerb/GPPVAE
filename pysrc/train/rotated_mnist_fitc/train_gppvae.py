@@ -88,7 +88,7 @@ else:
 z_dim = vae_cfg["zdim"]
 
 # device
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 if not torch.cuda.is_available():
     matplotlib.use("Qt5Agg")
 
@@ -250,29 +250,33 @@ def main():
         vae_optimizer.step()
         gp_optimizer.step()
 
-        # eval on validation set (using GPPVAE posterior predictive)
-        hv, imgs = evaluate_gppvae(vae, gp, Zm, Xvalid, valid_queue, Nvalid, epoch, device)
-
         smartSum(ht, "mse", float(mse.data.sum().cpu()) / float(Ntrain))
         smartSum(ht, "gp_nll", float(gp_nll.data.cpu()) / float(Ntrain))
         smartSum(ht, "recon_term", float(recon_term.data.sum().cpu()) / float(Ntrain))
         smartSum(ht, "pen_term", float(pen_term.data.sum().cpu()) / float(Ntrain))
         smartSum(ht, "loss", float(loss.data.cpu()) / float(Ntrain))
         smartAppendDict(history, ht)
-        smartAppendDict(history, hv)
 
-        logging.info(
-            "epoch %d - train_mse: %f - test_mse %f" % (epoch, ht["mse"], hv["mse_val"])
-        )
-
-        # callbacks
+        # eval on validation set (using GPPVAE posterior predictive)
         if epoch % opt.epoch_cb == 0:
+            hv, imgs = evaluate_gppvae(vae, gp, Zm, Xvalid, valid_queue, Nvalid, epoch, device)
+            smartAppendDict(history, hv)
+
+            logging.info(
+                "epoch %d - train_mse: %f - test_mse %f" % (epoch, ht["mse"], hv["mse_val"])
+            )
+
+            # callbacks
             logging.info("epoch %d - executing callback" % epoch)
             wfile = os.path.join(wdir, "weights.%.5d.pt" % epoch)
             ffile = os.path.join(fdir, "plot.%.5d.png" % epoch)
             torch.save(vae.state_dict(), wfile)
             covs = compute_covs(min_rot_angle, max_rot_angle, num_rotations, Xu, gp.kernel, device)
             callback_gppvae(epoch, history, covs, imgs, ffile)
+        else:
+            logging.info(
+                "epoch %d - train_mse: %f" % (epoch, ht["mse"])
+            )
 
     save_history(history, hdir, pickle=True)
 

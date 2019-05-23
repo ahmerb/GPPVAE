@@ -12,6 +12,11 @@ train cvae
 nohup python train_cvae.py --outdir ./out/cvae --data ../../../data/data_faces.h5 --epochs 5000 --lr 0.001 &> train_cvae.out &
 ```
 
+
+```bash
+nohup python train_cvae.py --outdir ./out/cvae2 --data ../../../data/data_faces.h5 --epochs 5000 --lr 0.001 &> train_cvae2.out &
+```
+
 training in unison
 
 ```bash
