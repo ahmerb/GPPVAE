@@ -232,3 +232,64 @@ def callback_gppvae(epoch, history, covs, imgs, ffile):
 
     pl.savefig(ffile)
     pl.close()
+
+
+def callback_svi_gppvae(epoch, history, covs, imgs, ffile):
+
+    # init fig
+    pl.figure(1, figsize=(8, 8))
+    pl.subplot(4, 4, 1)
+    pl.title("loss")
+    pl.plot(history["loss"], "k")
+
+    pl.subplot(4, 4, 5)
+    pl.title("recon_term")
+    pl.plot(history["recon_term"], "k")
+
+    pl.subplot(4, 4, 6)
+    pl.title("gp_nll")
+    pl.plot(history["gp_nll"], "k")
+    pl.subplot(4, 4, 9)
+
+    pl.title("mse_val")
+    pl.plot(history["mse_val"], "k")
+    pl.ylim(0, 0.1)
+    pl.subplot(4, 4, 10)
+
+    pl.title("mse")
+    pl.plot(history["mse"], "k")
+    pl.plot(history["mse_val"], "r")
+    pl.ylim(0, 0.01)
+
+    pl.subplot(4, 4, 13)
+    pl.title("K")
+    pl.imshow(covs["K"], vmin=-0.4, vmax=1)
+    pl.colorbar()
+    pl.subplot(4, 4, 14)
+    pl.title("Kuu")
+    pl.imshow(covs["Kuu"], vmin=-0.4, vmax=1)
+    pl.colorbar()
+
+    Y, Yr = imgs["Y"], imgs["Yr"]
+
+    pl.tight_layout()
+
+    # make plot
+    pl.subplot(4, 2, 2)
+    _img = _compose_multi([Y[0:6], Yr[0:6]])
+    pl.imshow(_img)
+
+    pl.subplot(4, 2, 4)
+    _img = _compose_multi([Y[6:12], Yr[6:12]])
+    pl.imshow(_img)
+
+    pl.subplot(4, 2, 6)
+    _img = _compose_multi([Y[12:18], Yr[12:18]])
+    pl.imshow(_img)
+
+    pl.subplot(4, 2, 8)
+    _img = _compose_multi([Y[18:24], Yr[18:24]])
+    pl.imshow(_img)
+
+    pl.savefig(ffile)
+    pl.close()

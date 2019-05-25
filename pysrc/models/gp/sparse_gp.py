@@ -11,12 +11,12 @@ from kernels.kernels import RotationKernel
 
 
 class SparseGPRegression(nn.Module):
-    def __init__(self, X, y, kernel, Xu, mean_function=None, noise=0.5):
+    def __init__(self, X, y, kernel, Xu, mean_function=None, noise=0.5, xu_trainable=True):
         super(SparseGPRegression, self).__init__()
         self.X = X
         self.train_points = (X,)
         self.y = y
-        self.Xu = Parameter(Xu)
+        self.Xu = Parameter(Xu) if xu_trainable else Xu
         self.kernel = kernel()
         self.mean_function = mean_function if mean_function is not None else self._zero_mean_function
         self.noise = Parameter(Xu.new_tensor(noise))
@@ -151,9 +151,6 @@ class SparseGPRegression(nn.Module):
         #
         # Note how inv(D) is trivial as D is diagonal
 
-        # XXX the Mahalanobis distance in now LxL term?????
-        # (computations may now be wrong for y.dim()=2 instead of y.dim()=1)
-
         # a) compute Linv_W_Dinv_y.T @ Linv_W_Dinv_y
 
         if y.dim() == 1:
@@ -256,7 +253,6 @@ class SparseGPRegression(nn.Module):
         return test_points.size(0)
 
     # in dual input case, test_points is tuple (Xnew, Wnew)
-    # NOTE this is from Pyro v0.21 pyro.contrib.gp.models.SparseGPRegression#forward
     def posterior_predictive(self, test_points, full_cov=False, noiseless=True):
         r"""
         Computes the mean and covariance matrix (or variance) of Gaussian Process

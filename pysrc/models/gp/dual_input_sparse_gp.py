@@ -10,15 +10,18 @@ import numpy as np
 from models.gp.sparse_gp import SparseGPRegression
 from kernels.kernels import KernelComposer, RotationKernel
 
+
 class DualInputSparseGPRegression(SparseGPRegression):
-    def __init__(self, X, W, y, x_kernel, w_kernel, kernel_composer, Xu, Wu, mean_function=None, noise=0.5):
-        super(DualInputSparseGPRegression, self).__init__(X, y, x_kernel, Xu, mean_function=mean_function, noise=noise)
+    def __init__(self, X, W, y, x_kernel, w_kernel, kernel_composer, Xu, Wu, mean_function=None, noise=0.5,
+                 xu_trainable=True, wu_trainable=True):
+        super(DualInputSparseGPRegression, self).__init__(X, y, x_kernel, Xu, mean_function=mean_function, noise=noise,
+                                                          xu_trainable=xu_trainable)
         self.x_kernel = self.kernel
         del self.kernel
         self.w_kernel = w_kernel()
         self.W = W
         self.train_points = (X, W)
-        self.Wu = Parameter(Wu)
+        self.Wu = Parameter(Wu) if wu_trainable else Wu
         self.kernel_composer = kernel_composer
 
     def Kfu(self):

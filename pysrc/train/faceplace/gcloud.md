@@ -17,7 +17,7 @@ nohup python train_cvae.py --outdir ./out/cvae --data ../../../data/data_faces.h
 nohup python train_cvae.py --outdir ./out/cvae2 --data ../../../data/data_faces.h5 --epochs 5000 --lr 0.001 &> train_cvae2.out &
 ```
 
-training in unison
+training gppvae-unison
 
 ```bash
 nohup python train_gppvae.py --epochs 5500 --train_unison &> train_gppvae_unison.out &
@@ -25,9 +25,19 @@ nohup python train_gppvae.py --epochs 5500 --train_unison &> train_gppvae_unison
 python train_gppvae.py --epochs 10 --epoch_cb 1 --train_unison
 ```
 
-train gppvae
+train gppvae-separate
 
 ```bash
 nohup python train_gppvae.py --epochs 1000 --vae_cfg ./out/vae/vae.cfg.p --vae_weights ./out/vae/weights/weights.04900.pt --outdir ./out/gppvae &> train_gppvae.out &
+```
+
+train svi-gppvae-unison
+
+```bash
+python train_gppvae_svi.py --outdir ./out/svi_gppvae_unison --epochs 10 --epoch_cb 1 --train_unison
+```
+
+```bash
+nohup python train_gppvae_svi.py --outdir ./out/svi_gppvae_unison --epochs 5500 --epoch_cb 100 --train_unison &> train_svi_gppvae_unison.out &
 ```
 

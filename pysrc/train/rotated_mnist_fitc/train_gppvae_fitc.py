@@ -16,8 +16,8 @@ from optparse import OptionParser
 import pickle
 
 from models.rotated_mnist_vae import RotatedMnistVAE
-from models.gp.sparse_gp import SparseGPRegression
-from kernels.kernels import RotationKernel
+from models.gp.dual_input_sparse_gp import DualInputSparseGPRegression
+from kernels.kernels import RotationKernel, SEKernel, KernelComposer
 
 from train.rotated_mnist_fitc.utils import smartSum, smartAppendDict, export_scripts
 from train.rotated_mnist_fitc.callbacks import callback_gppvae, save_history
@@ -96,10 +96,13 @@ if not torch.cuda.is_available():
 if not os.path.exists(opt.outdir):
     os.makedirs(opt.outdir)
 wdir = os.path.join(opt.outdir, "weights")
+gp_wdir = os.path.join(opt.outdir, "gp_weights")
 fdir = os.path.join(opt.outdir, "plots")
 hdir = os.path.join(opt.outdir, "history")
 if not os.path.exists(wdir):
     os.makedirs(wdir)
+if not os.path.exists(gp_wdir):
+    os.makedirs(gp_wdir)
 if not os.path.exists(fdir):
     os.makedirs(fdir)
 if not os.path.exists(hdir):
@@ -166,23 +169,39 @@ def main():
 
     # define GP
 
-    # init inducing points
-    M = 50
+    # init view inducing points (view is full rank)
+    M = num_rotations
     min_rot_angle = 0.0
     max_rot_angle = 337.5
-    Xu = torch.linspace(min_rot_angle, max_rot_angle, M).to(device)
+    Wu = torch.linspace(min_rot_angle, max_rot_angle, M).to(device)
+
+    # extract auxiliary data
+    Wtrain = torch.tensor(
+        list(map(lambda datapoint: float(datapoint[1]), train_data.data))
+    ).to(device)
+    Wvalid = torch.tensor(
+        list(map(lambda datapoint: float(datapoint[1]), valid_data.data))
+    ).to(device)
+
+    # init object inducing points
+    min_ix = 0.0
+    max_ix = float(len(train_data.data))
+    Xu = torch.linspace(min_ix, max_ix, M).to(device)
 
     # extract auxiliary data
     Xtrain = torch.tensor(
-        list(map(lambda datapoint: float(datapoint[1]), train_data.data)),
+        list(map(lambda tmp: float(tmp[0]), enumerate(train_data.data)))
     ).to(device)
     Xvalid = torch.tensor(
-        list(map(lambda datapoint: float(datapoint[1]), valid_data.data)),
+        list(map(lambda tmp: float(tmp[0]), enumerate(valid_data.data)))
     ).to(device)
 
     # init gp
-    kernel = RotationKernel
-    gp = SparseGPRegression(Xtrain, None, kernel, Xu).to(device)
+    x_kernel = SEKernel
+    w_kernel = RotationKernel
+    kernel_composer = KernelComposer.Product
+    gp = DualInputSparseGPRegression(Xtrain, Wtrain, None, x_kernel, w_kernel, kernel_composer,
+                                     Xu, Wu, wu_trainable=False).to(device)
 
     # optimizers
     vae_optimizer = optim.Adam(vae.parameters(), lr=opt.vae_lr)
@@ -206,6 +225,7 @@ def main():
         mse = torch.zeros(opt.bs, 1, device=device)
 
         # for each minibatch
+        # print('vae train')
         for batch_i, data in enumerate(train_queue):
             # get data from minibatch
             idxs = data['index']
@@ -235,23 +255,23 @@ def main():
             #     print("memory usage: ", torch.cuda.max_memory_allocated())
 
         # forward gp (using FITC)
+        # print('gp train')
         Z = Z.to(device)
         gp.y = Z
-        gp_nll = -gp()
-        gp_nll = gp_nll / z_dim
+        gp_mll = gp() / vae.K
 
         # penalization (compute the regularization term)
-        pen_term = -0.5 * Zs.sum() / z_dim
+        pen_term = (0.5 * Zs.sum() / vae.K).to(device)
 
         # loss and backprop
-        loss = recon_term.sum() + gp_nll + pen_term.sum().to(device)
+        loss = recon_term.sum() - gp_mll + pen_term.sum()
         loss.backward()
 
         vae_optimizer.step()
         gp_optimizer.step()
 
         smartSum(ht, "mse", float(mse.data.sum().cpu()) / float(Ntrain))
-        smartSum(ht, "gp_nll", float(gp_nll.data.cpu()) / float(Ntrain))
+        smartSum(ht, "gp_nll", -float(gp_mll.data.cpu()) / float(Ntrain))
         smartSum(ht, "recon_term", float(recon_term.data.sum().cpu()) / float(Ntrain))
         smartSum(ht, "pen_term", float(pen_term.data.sum().cpu()) / float(Ntrain))
         smartSum(ht, "loss", float(loss.data.cpu()) / float(Ntrain))
@@ -259,7 +279,7 @@ def main():
 
         # eval on validation set (using GPPVAE posterior predictive)
         if epoch % opt.epoch_cb == 0:
-            hv, imgs = evaluate_gppvae(vae, gp, Zm, Xvalid, valid_queue, Nvalid, epoch, device)
+            hv, imgs = evaluate_gppvae(vae, gp, Zm, Xvalid, Wvalid, valid_queue, Nvalid, epoch, device)
             smartAppendDict(history, hv)
 
             logging.info(
@@ -269,9 +289,11 @@ def main():
             # callbacks
             logging.info("epoch %d - executing callback" % epoch)
             wfile = os.path.join(wdir, "weights.%.5d.pt" % epoch)
+            gp_wfile = os.path.join(gp_wdir, "gp_weights.%5d.pt" % epoch)
             ffile = os.path.join(fdir, "plot.%.5d.png" % epoch)
             torch.save(vae.state_dict(), wfile)
-            covs = compute_covs(min_rot_angle, max_rot_angle, num_rotations, Xu, gp.kernel, device)
+            torch.save(gp.state_dict(), gp_wfile)
+            covs = compute_covs(Wu, gp.w_kernel, gp.x_kernel, Xtrain, Wu, device)
             callback_gppvae(epoch, history, covs, imgs, ffile)
         else:
             logging.info(
@@ -281,18 +303,21 @@ def main():
     save_history(history, hdir, pickle=True)
 
 
-def compute_covs(min_rot_angle, max_rot_angle, num_rotations, Xu, kernel, device):
-    # covariance between all unique rotation angles
-    x_unique = torch.linspace(min_rot_angle, max_rot_angle, num_rotations).to(device)
-    K = kernel(x_unique).data.cpu().numpy()
+def compute_covs(Wu, w_kernel, x_kernel, Xtrain, Xu, device):
+    # print('compute covs')
+    # NOTE this is all random crap rn
+    with torch.no_grad():
+        # covariance between all rotation angles
+        Kview = w_kernel(Wu).data.cpu().numpy()
 
-    # covariance between all Xu
-    Kuu = kernel(Xu).data.cpu().numpy()
+        # covariance between all Xu
+        #Kobj = x_kernel(Xtrain).data.cpu().numpy()
+        #K_uu = x_kernel(Xu).data.cpu().numpy()
+        # print('done covs')
+        return {"K": Kview, "Kuu": Kview}
 
-    return {"K": K, "Kuu": Kuu}
 
-
-def evaluate_gppvae(vae, gp, Zm, Xvalid, valid_queue, Nvalid, epoch, device):
+def evaluate_gppvae(vae, gp, Zm, Xvalid, Wvalid, valid_queue, Nvalid, epoch, device):
     hv = {}
     imgs = {}
 
@@ -301,9 +326,11 @@ def evaluate_gppvae(vae, gp, Zm, Xvalid, valid_queue, Nvalid, epoch, device):
 
     with torch.no_grad():
         # gp posterior predictive
+        # print('gp eval')
         gp.y = Zm.to(device)
-        z_test_mu, _ = gp.posterior_predictive(Xvalid)
+        z_test_mu, _ = gp.posterior_predictive(Xvalid, Wvalid)
 
+        # print('vae eval')
         for batch_i, data in enumerate(valid_queue):
             y_test = data['image'].unsqueeze(dim=1)
             idxs = data['index']
@@ -315,7 +342,7 @@ def evaluate_gppvae(vae, gp, Zm, Xvalid, valid_queue, Nvalid, epoch, device):
             # compute error
             recon_term, mse = vae.nll(y_test, y_test_recon)
             smartSum(hv, "mse_val", float(mse.data.sum().cpu()) / float(Nvalid))
-            smartSum(hv, "recon_term", float(recon_term.data.sum().cpu()) / float(Nvalid))
+            smartSum(hv, "recon_term_val", float(recon_term.data.sum().cpu()) / float(Nvalid))
 
             # store a few examples
             if batch_i == 0:
