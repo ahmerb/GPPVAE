@@ -34,7 +34,7 @@ parser.add_option(
     help="dataset path",
 )
 parser.add_option(
-    "--outdir", dest="outdir", type=str, default="./out/gppvae", help="output dir"
+    "--outdir", dest="outdir", type=str, default="./out/fitc_gppvae", help="output dir"
 )
 parser.add_option("--vae_cfg", dest="vae_cfg", type=str, default="./out/vae/vae.cfg.p")
 parser.add_option("--vae_weights", dest="vae_weights", type=str, default="./out/vae/weights/weights.00950.pt")
@@ -257,11 +257,12 @@ def main():
         # forward gp (using FITC)
         # print('gp train')
         Z = Z.to(device)
+        Z = Z - Z.mean()
         gp.y = Z
-        gp_mll = gp() / vae.K
+        gp_mll = gp() / z_dim # vae.K use zdim and see if this works better
 
         # penalization (compute the regularization term)
-        pen_term = (0.5 * Zs.sum() / vae.K).to(device)
+        pen_term = (0.5 * Zs.sum() / z_dim).to(device) # vae.K use zdim and see if this works better
 
         # loss and backprop
         loss = recon_term.sum() - gp_mll + pen_term.sum()
@@ -289,7 +290,7 @@ def main():
             # callbacks
             logging.info("epoch %d - executing callback" % epoch)
             wfile = os.path.join(wdir, "weights.%.5d.pt" % epoch)
-            gp_wfile = os.path.join(gp_wdir, "gp_weights.%5d.pt" % epoch)
+            gp_wfile = os.path.join(gp_wdir, "gp_weights.%.5d.pt" % epoch)
             ffile = os.path.join(fdir, "plot.%.5d.png" % epoch)
             torch.save(vae.state_dict(), wfile)
             torch.save(gp.state_dict(), gp_wfile)
@@ -297,7 +298,7 @@ def main():
             callback_gppvae(epoch, history, covs, imgs, ffile)
         else:
             logging.info(
-                "epoch %d - train_mse: %f" % (epoch, ht["mse"])
+                "epoch %d - train_mse: %f [%5f,%5f,%5f]" % (epoch, ht["mse"], ht["recon_term"], ht["gp_nll"], ht["pen_term"])
             )
 
     save_history(history, hdir, pickle=True)
@@ -327,8 +328,9 @@ def evaluate_gppvae(vae, gp, Zm, Xvalid, Wvalid, valid_queue, Nvalid, epoch, dev
     with torch.no_grad():
         # gp posterior predictive
         # print('gp eval')
-        gp.y = Zm.to(device)
-        z_test_mu, _ = gp.posterior_predictive(Xvalid, Wvalid)
+        Zm = Zm.to(device)
+        gp.y = Zm - Zm.mean()
+        z_test_mu = gp.posterior_predictive(Xvalid, Wvalid, compute_cov=False)
 
         # print('vae eval')
         for batch_i, data in enumerate(valid_queue):

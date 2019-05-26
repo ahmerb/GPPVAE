@@ -252,6 +252,70 @@ def callback_gppvae0(epoch, history, covs, imgs, ffile):
     pl.close()
 
 
+
+def callback_casale_gppvae(epoch, history, covs, imgs, ffile):
+
+    # init fig
+    pl.figure(1, figsize=(8, 8))
+    pl.subplot(4, 4, 1)
+    pl.title("loss")
+    pl.plot(history["loss"], "k")
+    pl.subplot(4, 4, 2)
+    pl.title("vars")
+    pl.plot(sp.array(history["vs"])[:, 0], "r")
+    pl.plot(sp.array(history["vs"])[:, 1], "k")
+    pl.ylim(0, 1)
+    pl.subplot(4, 4, 5)
+    pl.title("recon_term")
+    pl.plot(history["recon_term"], "k")
+    pl.subplot(4, 4, 6)
+    pl.title("gp_nll")
+    pl.plot(history["gp_nll"], "k")
+    pl.subplot(4, 4, 9)
+    pl.title("mse_out")
+    pl.plot(history["mse_out"], "k")
+    pl.ylim(0, 0.1)
+    pl.subplot(4, 4, 10)
+    pl.title("mse")
+    pl.plot(history["mse"], "k")
+    pl.plot(history["mse_val"], "r")
+    pl.ylim(0, 0.01)
+
+    pl.subplot(4, 4, 13)
+    pl.title("XX")
+    pl.imshow(covs["XX"], vmin=-0.4, vmax=1)
+    pl.colorbar()
+    pl.subplot(4, 4, 14)
+    pl.title("WW")
+    pl.imshow(covs["WW"], vmin=-0.4, vmax=1)
+    pl.colorbar()
+
+    Yv, Yr, Rv = imgs["Yv"], imgs["Yr"], imgs["Yo"]
+
+    pl.tight_layout()
+
+    # make plot
+    pl.subplot(4, 2, 2)
+    _img = _compose_multi([Yv[0:6], Yr[0:6], Rv[0:6]])
+    pl.imshow(_img)
+
+    pl.subplot(4, 2, 4)
+    _img = _compose_multi([Yv[6:12], Yr[6:12], Rv[6:12]])
+    pl.imshow(_img)
+
+    pl.subplot(4, 2, 6)
+    _img = _compose_multi([Yv[12:18], Yr[12:18], Rv[12:18]])
+    pl.imshow(_img)
+
+    pl.subplot(4, 2, 8)
+    _img = _compose_multi([Yv[18:24], Yr[18:24], Rv[18:24]])
+    pl.imshow(_img)
+
+    pl.savefig(ffile)
+    pl.close()
+
+
+# for FITC gppvae
 def callback_gppvae(epoch, history, covs, imgs, ffile):
 
     # init fig

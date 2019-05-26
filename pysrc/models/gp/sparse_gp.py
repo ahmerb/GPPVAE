@@ -1,3 +1,7 @@
+import sys, os
+
+sys.path.insert(1, os.path.join(sys.path[0], '../..'))
+
 import torch
 import torch.nn as nn
 from torch.nn import Parameter
@@ -7,17 +11,17 @@ import matplotlib
 import matplotlib.pyplot as pl
 import numpy as np
 
-from kernels.kernels import RotationKernel
+from kernels.kernels import SEKernel
 
 
 class SparseGPRegression(nn.Module):
-    def __init__(self, X, y, kernel, Xu, mean_function=None, noise=0.5, xu_trainable=True):
+    def __init__(self, X, y, kernel, Xu, lengthscale=None, mean_function=None, noise=0.5, xu_trainable=True):
         super(SparseGPRegression, self).__init__()
         self.X = X
         self.train_points = (X,)
         self.y = y
         self.Xu = Parameter(Xu) if xu_trainable else Xu
-        self.kernel = kernel()
+        self.kernel = kernel(lengthscale=lengthscale)
         self.mean_function = mean_function if mean_function is not None else self._zero_mean_function
         self.noise = Parameter(Xu.new_tensor(noise))
         self.jitter = 1e-3  # stablise Cholesky decompositions
@@ -57,7 +61,7 @@ class SparseGPRegression(nn.Module):
         Kffdiag = self.Kffdiag()
 
         Luu = self._cholesky(Kuu)  # MxM
-        W = torch.trtrs(Kfu.t(), Luu, upper=False)[0].t()  # NxM, solves Luu @ W.T = Kuf
+        W = torch.triangular_solve(Kfu.t(), Luu, upper=False)[0].t()  # NxM, solves Luu @ W.T = Kuf
         # W.T = LuuInv @ Kuf
         # MxN     MxM    MxN
 
@@ -161,7 +165,7 @@ class SparseGPRegression(nn.Module):
 
         # Linv_W_Dinv_y is the matrix M that solves eqn
         # LM = W_Dinv_y
-        Linv_W_Dinv_y = torch.trtrs(W_Dinv_y, L, upper=False)[0]  # MxL
+        Linv_W_Dinv_y = torch.triangular_solve(W_Dinv_y, L, upper=False)[0]  # MxL
         if y.dim() == 2:
             Linv_W_Dinv_y = Linv_W_Dinv_y.t()
 
@@ -199,7 +203,7 @@ class SparseGPRegression(nn.Module):
             raise NotImplementedError("SparseMultivariateNormal distribution does not support "
                                       "computing log_prob for a tensor with more than 2 dimensionals.")
 
-        Linv_W_Dinv_y = torch.trtrs(W_Dinv_y, L, upper=False)[0]
+        Linv_W_Dinv_y = torch.triangular_solve(W_Dinv_y, L, upper=False)[0]
         if y.dim() == 2:
             Linv_W_Dinv_y = Linv_W_Dinv_y.t()
 
@@ -214,7 +218,7 @@ class SparseGPRegression(nn.Module):
         logprob = -0.5 * (norm_const + logdet + mahalanobis_squared)
         return logprob.sum()
 
-    def predict_and_plot(self, Xnew, nsamples=3, mpl_backend=None):
+    def predict_and_plot(self, Xnew, epoch, nsamples=3, mpl_backend=None):
         if mpl_backend is not None:
             matplotlib.use('Qt5Agg')
 
@@ -230,7 +234,7 @@ class SparseGPRegression(nn.Module):
         # convert to numpy
         numpy = {
             'X': self.X.detach().numpy(),
-            'Xnew': Xnew.detach().numpy(),
+            'Xtest': Xnew.detach().numpy(),
             'mu': mu.detach().numpy(),
             'y': self.y.detach().numpy(),
             'f_posterior': f_posterior.detach().numpy(),
@@ -238,22 +242,24 @@ class SparseGPRegression(nn.Module):
             'Xu': self.Xu.detach().numpy()
         }
 
-        pl.plot(numpy['X'], numpy['y'], 'bs', ms=8)
-        pl.plot(numpy['Xnew'], numpy['f_posterior'])
-        pl.gca().fill_between(numpy['Xnew'],
-                              numpy['mu'] - 2 * numpy['Ldiag'],
-                              numpy['mu'] + 2 * numpy['Ldiag'],
-                              color="#dddddd")
-        pl.plot(numpy['Xnew'], numpy['mu'], 'r-', lw=2)
-        pl.plot(numpy['Xu'], np.zeros(numpy['Xu'].shape[-1]) + pl.ylim()[0], 'r^')
-        pl.title('{} Samples from GP Posterior'.format(nsamples))
-        pl.show()
+        fig, ax = pl.subplots()
+        ax.plot(numpy['X'], numpy['y'], 'bs', ms=1)
+        ax.plot(numpy['Xtest'], numpy['f_posterior'])
+        ax.fill_between(numpy['Xtest'],
+                        numpy['mu'] - 2 * numpy['Ldiag'],
+                        numpy['mu'] + 2 * numpy['Ldiag'],
+                        color="#969696")
+        ax.plot(numpy['Xtest'], numpy['mu'], 'r-', lw=2)
+        ax.plot(numpy['Xu'], np.zeros(numpy['Xu'].shape[-1]) + pl.ylim()[0], 'r^')
+        ax.set_title('%d Samples from GP Posterior' % nsamples)
+        filename = "plot_inducing_spread/plot.%.5d.eps" % epoch
+        pl.savefig(filename, format='eps', dpi=1000)
 
     def _get_num_test_points(self, test_points):
         return test_points.size(0)
 
     # in dual input case, test_points is tuple (Xnew, Wnew)
-    def posterior_predictive(self, test_points, full_cov=False, noiseless=True):
+    def posterior_predictive(self, test_points, compute_cov=True, full_cov=False, noiseless=True):
         r"""
         Computes the mean and covariance matrix (or variance) of Gaussian Process
         posterior on a test input data :math:`X_{new}`:
@@ -280,13 +286,14 @@ class SparseGPRegression(nn.Module):
         # D as in self.model()
         # K = I + W @ inv(D) @ W.T = L @ L.T
         # S = inv[Kuu + Kuf @ inv(D) @ Kfu]
-        #   = inv(Luu).T @ inv[I + inv(Luu)@ Kuf @ inv(D)@ Kfu @ inv(Luu).T] @ inv(Luu)
+        #   = inv(Luu).T @ inv[I + inv(Luu) @ Kuf @ inv(D) @ Kfu @ inv(Luu).T] @ inv(Luu)
         #   = inv(Luu).T @ inv[I + W @ inv(D) @ W.T] @ inv(Luu)
         #   = inv(Luu).T @ inv(K) @ inv(Luu)
         #   = inv(Luu).T @ inv(L).T @ inv(L) @ inv(Luu)
-        # loc = Ksu @ S @ Kuf @ inv(D) @ y = Ws.T @ inv(L).T @ inv(L) @ W @ inv(D) @ y
+        # loc = Ksu @ S @ Kuf @ inv(D) @ y
+        #     = Ws.T @ inv(L).T @ inv(L) @ W @ inv(D) @ y
         # cov = Kss - Ksu @ inv(Kuu) @ Kus + Ksu @ S @ Kus
-        #     = kss - Ksu @ inv(Kuu) @ Kus + Ws.T @ inv(L).T @ inv(L) @ Ws
+        #     = Kss - Ksu @ inv(Kuu) @ Kus + Ws.T @ inv(L).T @ inv(L) @ Ws
 
         N = self.X.size(0)
         M = self.Xu.size(0)
@@ -298,7 +305,7 @@ class SparseGPRegression(nn.Module):
 
         Kuf = self.Kfu().t()
 
-        W = Kuf.trtrs(Luu, upper=False)[0]
+        W = Kuf.triangular_solve(Luu, upper=False)[0]
 
         # compute D = diag[Kff - Qff + noise*I]
         D = self.noise.expand(N)
@@ -323,10 +330,10 @@ class SparseGPRegression(nn.Module):
         # End caching ----------
 
         Kus = self.Kus(test_points)
-        Ws = Kus.trtrs(Luu, upper=False)[0]
+        Ws = Kus.triangular_solve(Luu, upper=False)[0]
         # pack so we can do elimination simultaneously
         pack = torch.cat((W_Dinv_y, Ws), dim=1)  # pack = [ W_Dinv_y Ws ]
-        Linv_pack = pack.trtrs(L, upper=False)[0]  # Linv_pack = [ Linv_W_Dinv_y Linv_Ws ]
+        Linv_pack = pack.triangular_solve(L, upper=False)[0]  # Linv_pack = [ Linv_W_Dinv_y Linv_Ws ]
         # unpack
         Linv_W_Dinv_y = Linv_pack[:, :W_Dinv_y.shape[1]]
         Linv_Ws = Linv_pack[:, W_Dinv_y.shape[1]:]
@@ -336,26 +343,31 @@ class SparseGPRegression(nn.Module):
         if self.y.dim() == 1:
             loc = loc.squeeze()  # convert shape from (Ntext,1) to (Ntest,) i.e. reduce dim to 1
 
-        # compute posterior predictive cov
-        C = self._get_num_test_points(test_points)
-        if full_cov:
-            Kss = self.Kss(test_points).contiguous()
-            if not noiseless:
-                Kss.view(-1)[::C + 1] += self.noise  # add noise to the diagonal
-            Qss = Ws.t().matmul(Ws)
-            cov = Kss - Qss + Linv_Ws.t().matmul(Linv_Ws)
-        else:
-            Kssdiag = self.Kssdiag(test_points)
-            if not noiseless:
-                Kssdiag = Kssdiag + self.noise
-            Qssdiag = Ws.pow(2).sum(dim=0)
-            cov = Kssdiag - Qssdiag + Linv_Ws.pow(2).sum(dim=0)
-
-        cov_shape = self.y.shape[:-1] + (C, C)
-        cov = cov.expand(cov_shape)
-
         mu = self.mean_function(*test_points) if type(test_points) == tuple else self.mean_function(test_points)
-        return loc + mu, cov
+
+        # return early if not computing cov
+        if not compute_cov:
+            return loc + mu
+        else:
+            # compute posterior predictive cov
+            C = self._get_num_test_points(test_points)
+            if full_cov:
+                Kss = self.Kss(test_points).contiguous()
+                if not noiseless:
+                    Kss.view(-1)[::C + 1] += self.noise  # add noise to the diagonal
+                Qss = Ws.t().matmul(Ws)
+                cov = Kss - Qss + Linv_Ws.t().matmul(Linv_Ws)
+            else:
+                Kssdiag = self.Kssdiag(test_points)
+                if not noiseless:
+                    Kssdiag = Kssdiag + self.noise
+                Qssdiag = Ws.pow(2).sum(dim=0)
+                cov = Kssdiag - Qssdiag + Linv_Ws.pow(2).sum(dim=0)
+
+            cov_shape = self.y.shape[:-1] + (C, C)
+            cov = cov.expand(cov_shape)
+
+            return loc + mu, cov
 
     def _zero_mean_function(self, x):
         N = x.shape[0]  # num inputs, also equals w.shape[0]
@@ -395,17 +407,19 @@ class SparseGPRegression(nn.Module):
 def testStuff():
     N = 100
     M = 7
-    X = dists.Uniform(0.0, 5.0).sample(sample_shape=(N,))
+    X = dists.Uniform(0.1, 5.0).sample(sample_shape=(N,))
     y = 0.5 * torch.sin(3 * X) + dists.Normal(0.0, 0.1).sample(sample_shape=(N,))
     Xu = torch.linspace(0.1, 4.9, M)
 
-    sgpr = SparseGPRegression(X, y, RotationKernel, Xu)
+    sgpr = SparseGPRegression(X, y, SEKernel, Xu)
 
     optimizer = torch.optim.Adam(sgpr.parameters(), lr=0.005)
 
-    n_steps = 10
+    n_steps = 200
     losses = []
     print("begin training")
+    Xtest = torch.linspace(0.1, 5.0, 15)
+    epoch_cb = 10
     for i in range(n_steps):
         optimizer.zero_grad()
         loss = -sgpr()
@@ -413,9 +427,8 @@ def testStuff():
         optimizer.step()
         losses.append(loss.item())
         print("epoch {}: loss={}".format(i, loss.item()))
-
-    Xtest = torch.linspace(0.0, 5.0, 10)
-    sgpr.predict_and_plot(Xtest)
+        if i % epoch_cb == 0:
+            sgpr.predict_and_plot(Xtest, i, mpl_backend="Qt5Agg")
 
 
 if __name__ == "__main__":

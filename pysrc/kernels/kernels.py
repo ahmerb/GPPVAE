@@ -50,10 +50,26 @@ class Kernel(nn.Module):
 
 
 class SEKernel(Kernel):
-    def __init__(self):
+    def __init__(self, beta=None, lengthscale=None):
         super(SEKernel, self).__init__()
-        self.beta = nn.Parameter(torch.randn(1).clamp(min=0.0001)) # inverse noise param to rotation kernel
-        self.lengthscale = nn.Parameter(torch.randn(1).clamp(min=0.001)) # lengthscale squared param to rotation kernel
+        if beta is None:
+            self.beta = nn.Parameter(torch.randn(1).clamp(min=0.0001)) # inverse noise param to rotation kernel
+        else:
+            if type(beta) == float:
+                self.beta = nn.Parameter(torch.tensor(beta))
+            elif type(beta) == torch.Tensor and beta.dim() == 0:
+                self.beta = nn.Parameter(beta)
+            else:
+                raise TypeError('Kernel hyperparameter beta should be of class float or torch.Tensor with .dim()=0')
+        if lengthscale is None:
+            self.lengthscale = nn.Parameter(torch.randn(1).clamp(min=0.0001)) # inverse noise param to rotation kernel
+        else:
+            if type(lengthscale) == float:
+                self.lengthscale = nn.Parameter(torch.tensor(lengthscale))
+            elif type(lengthscale) == torch.Tensor and lengthscale.dim() == 0:
+                self.lengthscale = nn.Parameter(lengthscale)
+            else:
+                raise TypeError('Kernel hyperparameter lengthscale should be of class float or torch.Tensor with .dim()=0')
 
     def forward(self, X1, X2=None, diag=False):
         dist = self.dist(X1, X2, diag=diag)

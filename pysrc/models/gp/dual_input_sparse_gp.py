@@ -82,10 +82,10 @@ class DualInputSparseGPRegression(SparseGPRegression):
         L = self.y.shape[1:]  # output dimension
         return x.new_zeros(N, *tuple(L))
 
-    def posterior_predictive(self, Xnew, Wnew, full_cov=False, noiseless=True):
+    def posterior_predictive(self, Xnew, Wnew, compute_cov=True, full_cov=False, noiseless=True):
         test_points = (Xnew, Wnew)
         return super(DualInputSparseGPRegression, self) \
-            .posterior_predictive(test_points, full_cov=full_cov, noiseless=noiseless)
+            .posterior_predictive(test_points, compute_cov=compute_cov, full_cov=full_cov, noiseless=noiseless)
 
     def predict_and_plot(self, Xnew, Wnew, nsamples=3, mpl_backend=None):
         if mpl_backend is not None:
