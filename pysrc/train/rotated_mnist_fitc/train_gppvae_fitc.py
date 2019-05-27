@@ -82,7 +82,7 @@ opt_dict = vars(opt)
 vae_cfg = None
 if opt.train_unison:
     vae_cfg = {"img_size": 32, "nf": opt.filts, "zdim": opt.zdim, "steps": 3, "colors": 1, "vy": opt.vy}
-    pickle.dump(vae_cfg, open(os.path.join(opt.outdir, "vae_unison.cfg.p"), "wb"))
+    # pickle.dump(vae_cfg, open(os.path.join(opt.outdir, "vae_unison.cfg.p"), "wb"))
 else:
     vae_cfg = pickle.load(open(opt.vae_cfg, "rb"))
 z_dim = vae_cfg["zdim"]
@@ -200,6 +200,9 @@ def main():
     x_kernel = SEKernel
     w_kernel = RotationKernel
     kernel_composer = KernelComposer.Product
+    # gp_cfg = [Xtrain, Wtrain, None, x_kernel, w_kernel, kernel_composer, Xu, Wu]
+    # pickle.dump(gp_cfg, open(os.path.join("./plot", "gp.cfg.p"), "wb"))
+    # sys.exit(1)
     gp = DualInputSparseGPRegression(Xtrain, Wtrain, None, x_kernel, w_kernel, kernel_composer,
                                      Xu, Wu, wu_trainable=False).to(device)
 
@@ -253,6 +256,11 @@ def main():
 
             # if torch.cuda.is_available():
             #     print("memory usage: ", torch.cuda.max_memory_allocated())
+
+        # XXX
+        # tmp = Zm.numpy()
+        # pickle.dump(tmp, open(os.path.join("./plot", "Zm.dump"), "wb"))
+        # sys.exit(1)
 
         # forward gp (using FITC)
         # print('gp train')

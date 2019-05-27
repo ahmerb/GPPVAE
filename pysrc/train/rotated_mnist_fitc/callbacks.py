@@ -252,7 +252,6 @@ def callback_gppvae0(epoch, history, covs, imgs, ffile):
     pl.close()
 
 
-
 def callback_casale_gppvae(epoch, history, covs, imgs, ffile):
 
     # init fig
@@ -297,19 +296,19 @@ def callback_casale_gppvae(epoch, history, covs, imgs, ffile):
     # make plot
     pl.subplot(4, 2, 2)
     _img = _compose_multi([Yv[0:6], Yr[0:6], Rv[0:6]])
-    pl.imshow(_img)
+    pl.imshow(_img.squeeze())
 
     pl.subplot(4, 2, 4)
     _img = _compose_multi([Yv[6:12], Yr[6:12], Rv[6:12]])
-    pl.imshow(_img)
+    pl.imshow(_img.squeeze())
 
     pl.subplot(4, 2, 6)
     _img = _compose_multi([Yv[12:18], Yr[12:18], Rv[12:18]])
-    pl.imshow(_img)
+    pl.imshow(_img.squeeze())
 
     pl.subplot(4, 2, 8)
     _img = _compose_multi([Yv[18:24], Yr[18:24], Rv[18:24]])
-    pl.imshow(_img)
+    pl.imshow(_img.squeeze())
 
     pl.savefig(ffile)
     pl.close()

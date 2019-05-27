@@ -8,7 +8,7 @@ from torch import nn, optim
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from models.rotated_mnist_vae import RotatedMnistVAE
-from train.faceplace.vmod import Vmodel
+from train.rotated_mnist_fitc.vmod import Vmodel
 from train.faceplace.gp import GP
 import scipy as sp
 import pdb
@@ -25,7 +25,7 @@ parser.add_option(
     "--data",
     dest="data",
     type=str,
-    default="../../../data/data_faces.h5",
+    default='../../../mnist_data',
     help="dataset path",
 )
 parser.add_option(
@@ -39,7 +39,7 @@ parser.add_option(
     dest="vae_lr",
     type=float,
     #default=3e-4,
-    default=1e-3,
+    default=2e-4,
     help="learning rate of vae params",
 )
 parser.add_option(
@@ -63,9 +63,9 @@ parser.add_option("--debug", action="store_true", dest="debug", default=False)
 parser.add_option("--train_unison", action="store_true", dest="train_unison", default=False)
 # only use below options if train_unison is True
 parser.add_option(
-    "--filts", dest="filts", type=int, default=32, help="number of convol filters"
+    "--filts", dest="filts", type=int, default=8, help="number of convol filters"
 )
-parser.add_option("--zdim", dest="zdim", type=int, default=256, help="zdim")
+parser.add_option("--zdim", dest="zdim", type=int, default=16, help="zdim")
 parser.add_option(
     "--vy", dest="vy", type=float, default=2e-3, help="conditional norm lik variance"
 )
@@ -155,18 +155,19 @@ def main():
     # extract auxiliary data
     Wt = torch.tensor(
         list(map(lambda datapoint: float(datapoint[1]), train_data.data))
-    ).to(device)
+    ).unsqueeze(dim=1).to(device)
     Wv = torch.tensor(
         list(map(lambda datapoint: float(datapoint[1]), valid_data.data))
-    ).to(device)
+    ).unsqueeze(dim=1).to(device)
 
     # extract auxiliary data
     Dt = torch.tensor(
         list(map(lambda tmp: float(tmp[0]), enumerate(train_data.data)))
-    ).to(device)
+    ).unsqueeze(dim=1).to(device)
     Dv = torch.tensor(
         list(map(lambda tmp: float(tmp[0]), enumerate(valid_data.data)))
-    ).to(device)
+    ).unsqueeze(dim=1).to(device)
+    print(Dt.shape)
 
     # define VAE and optimizer
     vae = RotatedMnistVAE(**vae_cfg).to(device)
@@ -178,10 +179,10 @@ def main():
     # define gp
     P = Dt.shape[0] # number unique obj's
     Q = sp.unique(num_rotations).shape[0] # number unique views
-    vm = Vmodel(P, Q, opt.xdim, Q).to(device) # low-rank approx
+    vm = Vmodel().to(device) # low-rank approx
     gp = GP(n_rand_effs=1).to(device)
     gp_params = nn.ParameterList()
-    gp_params.extend(vm.parameters())
+    # gp_params.extend(vm.parameters())
     gp_params.extend(gp.parameters())
 
     # define optimizers
@@ -195,7 +196,7 @@ def main():
     for epoch in range(opt.epochs):
 
         # 1. encode Y in mini-batches
-        Zm, Zs = encode_Y(vae, train_queue) # gets encodings (distrib params q(z|y=y)) for entire dataset
+        Zm, Zs = encode_Y(vae, train_queue, Ntrain) # gets encodings (distrib params q(z|y=y)) for entire dataset
 
         # 2. sample Z
         # sample a z for each encoding (zm,zs) above
@@ -207,7 +208,7 @@ def main():
         Vt = vm(Dt, Wt).detach() # Dt is training obj ids, Wt is training view ids. Vt is V in K=V*V^t+alpha*I (eqn 20 in paper), i.e. low rank aproximation for kernel
 
         Vv = vm(Dv, Wv).detach() # Dv is validation obj ids, Wv is validation view ids.
-        rv_eval, imgs, covs = eval_step(vae, gp, vm, valid_queue, Zm, Vt, Vv)
+        rv_eval, imgs, covs = eval_step(vae, gp, vm, valid_queue, Zm, Vt, Vv, Dt, Wt)
 
         # 4. compute first-order Taylor expansion coefficient
         # evaluate a, B, c across all samples (which we used for Vt)?
@@ -229,6 +230,7 @@ def main():
             vbs,
             vae_optimizer,
             gp_optimizer,
+            Ntrain
         )
         rv_back["loss"] = (
             rv_back["recon_term"] + rv_eval["gp_nll"] + rv_back["pen_term"]
@@ -246,13 +248,13 @@ def main():
         # callback?
         if epoch % opt.epoch_cb == 0:
             logging.info("epoch %d - executing callback" % epoch)
-            ffile = os.path.join(opt.outdir, "plot.%.5d.png" % epoch)
+            ffile = os.path.join(fdir, "plot.%.5d.png" % epoch)
             callback_casale_gppvae(epoch, history, covs, imgs, ffile)
 
     save_history(history, hdir, pickle=True)
 
 
-def encode_Y(vae, train_queue):
+def encode_Y(vae, train_queue, Ntrain):
     # finds encoding of every single datapoint
     # does forward encoding passes in minibatches
 
@@ -260,28 +262,28 @@ def encode_Y(vae, train_queue):
 
     with torch.no_grad():
 
-        n = train_queue.dataset.Y.shape[0]
+        n = Ntrain
         Zm = Variable(torch.zeros(n, vae_cfg["zdim"]), requires_grad=False).to(device)
         Zs = Variable(torch.zeros(n, vae_cfg["zdim"]), requires_grad=False).to(device)
 
         for batch_i, data in enumerate(train_queue):
             # data = [ imgs, objs, views, indices of corresponding data ]
-            y = data[0].to(device)
-            idxs = data[-1].to(device)
+            y = data['image'].unsqueeze(dim=1).to(device)
+            idxs = data['index'].to(device)
             zm, zs = vae.encode(y)
             Zm[idxs], Zs[idxs] = zm.detach(), zs.detach()
 
     return Zm, Zs
 
 
-def eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv):
+def eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv, Dt, Wt):
 
     rv = {}
 
     with torch.no_grad():
 
-        _X = vm.x().data.cpu().numpy()
-        _W = vm.v().data.cpu().numpy()
+        _X = Dt.data.cpu().numpy()
+        _W = Wt.data.cpu().numpy()
         covs = {"XX": sp.dot(_X, _X.T), "WW": sp.dot(_W, _W.T)}
         rv["vars"] = gp.get_vs().data.cpu().numpy()
         # out of sample
@@ -292,8 +294,8 @@ def eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv):
         mse_out = Variable(torch.zeros(Vv.shape[0], 1), requires_grad=False).to(device)
         mse_val = Variable(torch.zeros(Vv.shape[0], 1), requires_grad=False).to(device)
         for batch_i, data in enumerate(val_queue):
-            idxs = data[-1].to(device)
-            Yv = data[0].to(device)
+            idxs = data['index'].to(device)
+            Yv = data['image'].unsqueeze(dim=1).to(device)
             Zv = vae.encode(Yv)[0].detach() # gets the mean (ignored z_sigma output)
             Yr = vae.decode(Zv)
             Yo = vae.decode(Zo[idxs])
@@ -316,7 +318,7 @@ def eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv):
 
 
 def backprop_and_update(
-    vae, gp, vm, train_queue, Dt, Wt, Eps, Zb, Vbs, vbs, vae_optimizer, gp_optimizer
+    vae, gp, vm, train_queue, Dt, Wt, Eps, Zb, Vbs, vbs, vae_optimizer, gp_optimizer, Ntrain
 ):
 
     rv = {}
@@ -331,12 +333,12 @@ def backprop_and_update(
     for batch_i, data in enumerate(train_queue):
 
         # subset data: (data[-1] gives indices of datapoints in this minibatch)
-        y = data[0].to(device)
-        eps = Eps[data[-1]]
-        _d = Dt[data[-1]]
-        _w = Wt[data[-1]]
-        _Zb = Zb[data[-1]]
-        _Vbs = [Vbs[0][data[-1]]]
+        y = data['image'].unsqueeze(dim=1).to(device)
+        eps = Eps[data['index']]
+        _d = Dt[data['index']]
+        _w = Wt[data['index']]
+        _Zb = Zb[data['index']]
+        _Vbs = [Vbs[0][data['index']]]
 
         # forward vae
         # computes reconstruction loss (distance between true image and output of decoder)
@@ -359,7 +361,7 @@ def backprop_and_update(
         loss.backward()
 
         # store stuff
-        _n = train_queue.dataset.Y.shape[0]
+        _n = Ntrain
         smartSum(rv, "mse", float(mse.data.sum().cpu()) / _n)
         smartSum(rv, "recon_term", float(recon_term.data.sum().cpu()) / _n)
         smartSum(rv, "pen_term", float(pen_term.data.sum().cpu()) / _n)
