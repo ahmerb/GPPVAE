@@ -31,8 +31,8 @@ parser.add_option(
 parser.add_option(
     "--outdir", dest="outdir", type=str, default="./out/gppvae_unison", help="output dir"
 )
-parser.add_option("--vae_cfg", dest="vae_cfg", type=str, default="./out/vae/vae.cfg.p") # ignore if training unsion
-parser.add_option("--vae_weights", dest="vae_weights", type=str, default="./out/vae/weights/weights.04950.pt") # ignore if training unsion
+parser.add_option("--vae_cfg", dest="vae_cfg", type=str, default="./out/vae/vae.cfg.p")
+parser.add_option("--vae_weights", dest="vae_weights", type=str, default="./out/vae/weights/weights.02500.pt")
 parser.add_option("--seed", dest="seed", type=int, default=0, help="seed")
 parser.add_option(
     "--vae_lr",
@@ -43,7 +43,7 @@ parser.add_option(
     help="learning rate of vae params",
 )
 parser.add_option(
-    "--gp_lr", dest="gp_lr", type=float, default=1e-3, help="learning rate of gp params"
+    "--gp_lr", dest="gp_lr", type=float, default=1e-2, help="learning rate of gp params"
 )
 parser.add_option(
     "--xdim", dest="xdim", type=int, default=64, help="rank of object linear covariance"
@@ -53,11 +53,11 @@ parser.add_option(
     "--epoch_cb",
     dest="epoch_cb",
     type=int,
-    default=100,
+    default=50,
     help="number of epoch by which a callback (plot + dump weights) is executed",
 )
 parser.add_option(
-    "--epochs", dest="epochs", type=int, default=5500, help="total number of epochs"
+    "--epochs", dest="epochs", type=int, default=500, help="total number of epochs"
 )
 parser.add_option("--debug", action="store_true", dest="debug", default=False)
 parser.add_option("--train_unison", action="store_true", dest="train_unison", default=False)
@@ -308,9 +308,9 @@ def eval_step(vae, gp, vm, val_queue, Zm, Vt, Vv, Dt, Wt):
             # store a few examples
             if batch_i == 0:
                 imgs = {}
-                imgs["Yv"] = Yv[:24].data.cpu().numpy().transpose(0, 2, 3, 1)
-                imgs["Yr"] = Yr[:24].data.cpu().numpy().transpose(0, 2, 3, 1)
-                imgs["Yo"] = Yo[:24].data.cpu().numpy().transpose(0, 2, 3, 1)
+                imgs["Yv"] = Yv[:24].data.cpu().numpy().transpose(0, 2, 3, 1) # ORIGINAL IMAGE
+                imgs["Yr"] = Yr[:24].data.cpu().numpy().transpose(0, 2, 3, 1) # VAE RECON
+                imgs["Yo"] = Yo[:24].data.cpu().numpy().transpose(0, 2, 3, 1) # GPPVAE RECON
         rv["mse_out"] = float(mse_out.data.mean().cpu())
         rv["mse_val"] = float(mse_val.data.mean().cpu())
 

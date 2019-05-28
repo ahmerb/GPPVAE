@@ -52,3 +52,17 @@ python train_gppvae_casale.py --outdir ./out/casale_gppvae_unison --epochs 10 --
 ```
 
 ---
+
+gppvae_casale separate
+
+```bash
+nohup python train_gppvae_casale.py  --outdir ./out/casale_gppvae_separate &> train_casale_gppvae_separate.out &
+```
+
+or for testing stuff
+
+```bash
+python train_gppvae_casale.py --outdir ./out/casale_gppvae_separate --epochs 10 --epoch_cb 1 --vae_lr 0.0003
+```
+
+---
