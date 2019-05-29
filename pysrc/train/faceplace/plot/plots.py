@@ -13,7 +13,13 @@ class Plotter():
         gppvae_file_path="../out/gppvae/history/history.pkl",
         gppvae_unison_file_path="../out/gppvae_unison/history/history.pkl",
         cvae_file_path="../out/cvae/history/history.pkl",
+        svi_gppvae_unison_file_path="../out/svi_gppvae_unison/history/history.pkl",
         interactive_mode=False):
+
+        self.svi_gppvae_unison_file_path = svi_gppvae_unison_file_path
+        self.svi_gppvae_unison_history = self.load_svi_gppvae_unison_history()
+        self.N_svi_gppvae_unison = len(self.svi_gppvae_unison_history['mse'])
+
         self.gppvae_unison_file_path = gppvae_unison_file_path
         # dict_keys(['mse_out', 'mse_val', 'gp_nll', 'mse', 'recon_term',
         #            'pen_term', 'loss', 'vs_1', 'vs_2', 'vars_1', 'vars_2'])
@@ -43,6 +49,11 @@ class Plotter():
 
     def load_cvae_history(self):
         with open(self.cvae_file_path, "rb") as f:
+            history = pickle.load(f)
+            return history
+
+    def load_svi_gppvae_unison_history(self):
+        with open(self.svi_gppvae_unison_file_path, "rb") as f:
             history = pickle.load(f)
             return history
 
@@ -78,27 +89,33 @@ class Plotter():
         # NOTE: also plot GPPVAE-unison after 5k epochs (same as VAE runtime) ??
         # valid plots
         fig, ax = plt.subplots()
-        x_index = np.arange(0, 3)
-        bar_gppvae_unison, bar_gppvae, bar_vae = ax.bar(x_index, (self.gppvae_unison_history['mse_val'][-1],
+        x_index = np.arange(0, 4)
+        bar_svi_gppvae_unison, bar_gppvae_unison, bar_gppvae, bar_vae = ax.bar(x_index, (
+                                                                  self.svi_gppvae_unison_history['mse_val'][-1],
+                                                                  self.gppvae_unison_history['mse_val'][-1],
                                                                   self.gppvae_history['mse_val'][-1],
                                                                   self.vae_history['mse_val'][-1]))
         ax.set_xticks(x_index)
         # ax.set_xticklabels(['VAE', 'GPPVAE-separate', 'GPPVAE-unison'])
-        ax.set_xticklabels(['GPPVAE-unison', 'GPPVAE-separate', 'VAE'])
-        ax.set_ylabel('Mean Squared Error (validation)')
-        self._show("mse_valid_bar2.eps")
+        ax.set_xticklabels(['SVI-GPPVAE-unison', 'Casale-GPPVAE-unison', 'Casale-GPPVAE-separate', 'VAE'], rotation=60)
+        ax.set_ylabel('Mean Squared Error (test)')
+        plt.tight_layout()
+        self._show("mse_valid_bar.eps")
 
         # train plots
         fig, ax = plt.subplots()
-        x_index = np.arange(0, 3)
-        bar_gppvae_unison, bar_gppvae, bar_vae = ax.bar(x_index, (self.gppvae_unison_history['mse'][-1],
+        x_index = np.arange(0, 4)
+        bar_svi_gppvae_unison, bar_gppvae_unison, bar_gppvae, bar_vae = ax.bar(x_index, (
+                                                                  self.svi_gppvae_unison_history['mse'][-1],
+                                                                  self.gppvae_unison_history['mse'][-1],
                                                                   self.gppvae_history['mse'][-1],
                                                                   self.vae_history['mse'][-1]))
         ax.set_xticks(x_index)
         # ax.set_xticklabels(['VAE', 'GPPVAE-separate', 'GPPVAE-unison'])
-        ax.set_xticklabels(['GPPVAE-unison', 'GPPVAE-separate', 'VAE'])
+        ax.set_xticklabels(['SVI-GPPVAE-unison', 'Casale-GPPVAE-unison', 'Casale-GPPVAE-separate', 'VAE'], rotation=60)
         ax.set_ylabel('Mean Squared Error (train)')
-        self._show("mse_train_bar2.eps")
+        plt.tight_layout()
+        self._show("mse_train_bar.eps")
 
     def plot_vae_curves(
         self,
@@ -128,6 +145,36 @@ class Plotter():
         for key in plot_keys:
             fig, ax = plt.subplots()
             ys = self.vae_history[key]
+            ax.plot(xs, ys)
+            ax.set_xlabel('# Epochs')
+            ax.set_ylabel(ylabels[key])
+            ax.grid(which='both', axis='both')
+            self._show(filenames[key])
+
+    def plot_svi_gppvae_unison_curves(
+        self,
+        filenames={
+            "mse": "svi_gppvae_unison_mse.eps",
+            # "mse_val": "svi_gppvae_unison_mse_out.eps",
+            "gp_nll": "svi_gppvae_unison_gp_nll.eps",
+            "recon_term": "svi_gppvae_unison_recon.eps",
+            "pen_term": "svi_gppvae_unison_pen.eps",
+            "loss": "svi_gppvae_unison_loss.eps"
+        },
+        ylabels={
+            "mse": "Mean squared error (train)",
+            # "mse_val": "Mean squared error (test)",
+            "gp_nll": "GP negative log likelihood (train)",
+            "recon_term": "Reconstruction term (train)",
+            "pen_term": "Penalisation term (train)",
+            "loss": "Loss (train)"
+        }
+    ):
+        xs = np.arange(0, self.N_svi_gppvae_unison, 1)
+        plot_keys = filenames.keys()
+        for key in plot_keys:
+            fig, ax = plt.subplots()
+            ys = self.svi_gppvae_unison_history[key]
             ax.plot(xs, ys)
             ax.set_xlabel('# Epochs')
             ax.set_ylabel(ylabels[key])
@@ -266,3 +313,4 @@ if __name__ == "__main__":
     # plotter.plot_cvae_curves()
     plotter.plot_mse_bars()
     # plotter.plot_mse_bars_for_failed_cvae()
+    plotter.plot_svi_gppvae_unison_curves()
