@@ -96,13 +96,13 @@ class Plotter():
                                                                   self.gppvae_history['mse_val'][-1],
                                                                   self.vae_history['mse_val'][-1]))
         ax.set_xticks(x_index)
-        print(
-            (
-                                                                  self.svi_gppvae_unison_history['mse_val'][-1],
-                                                                  self.gppvae_unison_history['mse_val'][-1],
-                                                                  self.gppvae_history['mse_val'][-1],
-                                                                  self.vae_history['mse_val'][-1])
-        )
+        # print(
+        #     (
+        #                                                           self.svi_gppvae_unison_history['mse_val'][-1],
+        #                                                           self.gppvae_unison_history['mse_val'][-1],
+        #                                                           self.gppvae_history['mse_val'][-1],
+        #                                                           self.vae_history['mse_val'][-1])
+        # )
         # ax.set_xticklabels(['VAE', 'GPPVAE-separate', 'GPPVAE-unison'])
         ax.set_xticklabels(['SVI-GPPVAE-unison', 'Casale-GPPVAE-unison', 'Casale-GPPVAE-separate', 'VAE'], rotation=60)
         ax.set_ylabel('Mean Squared Error (test)')
@@ -117,13 +117,13 @@ class Plotter():
                                                                   self.gppvae_unison_history['mse'][-1],
                                                                   self.gppvae_history['mse'][-1],
                                                                   self.vae_history['mse'][-1]))
-        print(
-            (
-                                                                  self.svi_gppvae_unison_history['mse'][-1],
-                                                                  self.gppvae_unison_history['mse'][-1],
-                                                                  self.gppvae_history['mse'][-1],
-                                                                  self.vae_history['mse'][-1])
-        )
+        # print(
+        #     (
+        #                                                           self.svi_gppvae_unison_history['mse'][-1],
+        #                                                           self.gppvae_unison_history['mse'][-1],
+        #                                                           self.gppvae_history['mse'][-1],
+        #                                                           self.vae_history['mse'][-1])
+        # )
         ax.set_xticks(x_index)
         # ax.set_xticklabels(['VAE', 'GPPVAE-separate', 'GPPVAE-unison'])
         ax.set_xticklabels(['SVI-GPPVAE-unison', 'Casale-GPPVAE-unison', 'Casale-GPPVAE-separate', 'VAE'], rotation=60)
